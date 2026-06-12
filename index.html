@@ -36,8 +36,9 @@
         <div id="hdr-date" class="hdr-date"></div>
         <div id="hdr-user" class="hdr-user muted small"></div>
       </div>
-      <button id="btn-refresh" class="btn-icon" title="Refresh">↻</button>
+      <button id="btn-settings" class="btn-icon" title="Calendars">⚙</button>
     </header>
+    <div id="ptr" class="ptr" hidden></div>
 
     <!-- Brief banner -->
     <div id="brief" class="brief" hidden>
@@ -57,7 +58,11 @@
 
     <!-- Week tab -->
     <main id="tab-week" class="tab" hidden>
-      <h2>Week ahead</h2>
+      <div class="week-nav">
+        <button id="week-prev" class="btn-icon">‹</button>
+        <button id="week-today" class="week-label-btn"><span id="week-label"></span></button>
+        <button id="week-next" class="btn-icon">›</button>
+      </div>
       <div id="week-list"></div>
     </main>
 
@@ -82,6 +87,18 @@
   </section>
 
   <div id="toast" class="toast" hidden></div>
+
+  <!-- Calendar picker -->
+  <div id="settings" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <strong>Calendars</strong>
+        <button id="settings-close" class="btn-icon">✕</button>
+      </div>
+      <p class="muted small">Choose what shows in this app (per device).</p>
+      <div id="cal-list" class="cal-list"></div>
+    </div>
+  </div>
 </div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>

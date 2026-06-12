@@ -73,6 +73,29 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   font-size: 0.85rem; font-weight: 600; padding: 10px 0; border-radius: 10px; cursor: pointer; }
 .tabbar button.active { color: var(--accent); background: var(--bg); }
 
+/* Pull-to-refresh */
+.ptr { height: 0; overflow: hidden; text-align: center; color: var(--muted);
+  font-size: 0.8rem; line-height: 40px; transition: height 0.12s; }
+
+/* Week nav */
+.week-nav { display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin: 6px 0 10px; }
+.week-label-btn { flex: 1; border: 1px solid var(--line); background: var(--card);
+  color: var(--ink); font-size: 0.95rem; font-weight: 700; padding: 8px 0;
+  border-radius: 10px; cursor: pointer; }
+.day-group.past { opacity: 0.55; }
+
+/* Modal / calendar picker */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 40;
+  display: flex; align-items: flex-end; }
+.modal-card { background: var(--card); width: 100%; border-radius: 18px 18px 0 0;
+  padding: 16px 18px calc(20px + var(--safe-bottom)); max-height: 75dvh; overflow-y: auto; }
+.modal-head { display: flex; justify-content: space-between; align-items: center; }
+.cal-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.cal-row { display: flex; align-items: center; gap: 12px; padding: 10px 2px;
+  border-bottom: 1px solid var(--line); font-size: 0.95rem; }
+.cal-row input { width: 20px; height: 20px; accent-color: var(--accent); }
+
 .toast { position: fixed; bottom: calc(70px + var(--safe-bottom)); left: 50%;
   transform: translateX(-50%); background: var(--ink); color: var(--bg);
   padding: 10px 16px; border-radius: 10px; font-size: 0.85rem; z-index: 50;
