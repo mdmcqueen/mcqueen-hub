@@ -3,7 +3,7 @@
 
 const CONFIG = {
   // Paste the OAuth client ID once created (Google Cloud console → Credentials).
-  CLIENT_ID: "__OAUTH_CLIENT_ID__",
+  CLIENT_ID: "508766830058-i6fta7vh37vu0o167vvsm74d2vr674dd.apps.googleusercontent.com",
   SCOPES: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email",
   TZ: "America/Los_Angeles",
   BRIEF_TITLE: "🌙 Daily Brief",
