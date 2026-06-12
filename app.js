@@ -36,17 +36,29 @@ function initAuth() {
     callback: onToken,
     error_callback: (e) => { toast("Sign-in didn't complete" + (e && e.type ? ` (${e.type})` : "")); showSignin(); },
   });
+  // Reuse a still-valid cached token (survives app close/reopen within the hour).
+  const cachedTok = localStorage.getItem("hub.tok");
+  const cachedExp = Number(localStorage.getItem("hub.tokExp") || 0);
+  if (cachedTok && Date.now() < cachedExp - 60000) {
+    state.token = cachedTok; state.tokenExp = cachedExp;
+    showMain(); loadCalendars();
+    return;
+  }
   const hasAuthed = localStorage.getItem("hub.authed") === "1";
   if (hasAuthed) requestToken(false); else showSignin();
 }
-function requestToken(interactive) {
-  state.tokenClient.requestAccessToken({ prompt: interactive ? "consent" : "" });
+function requestToken(_interactive) {
+  // Always prompt:"" — Google only shows UI when actually needed (no session or no
+  // prior grant). Forcing "consent" re-triggers the unverified-app warning every time.
+  state.tokenClient.requestAccessToken({ prompt: "" });
 }
 async function onToken(resp) {
   if (resp.error) { showSignin(); return; }
   state.token = resp.access_token;
   state.tokenExp = Date.now() + (resp.expires_in - 60) * 1000;
   localStorage.setItem("hub.authed", "1");
+  localStorage.setItem("hub.tok", state.token);
+  localStorage.setItem("hub.tokExp", String(state.tokenExp));
   if (!state.email) {
     try {
       const r = await gapiFetch("https://www.googleapis.com/oauth2/v2/userinfo");
