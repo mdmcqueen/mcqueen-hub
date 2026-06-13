@@ -278,22 +278,209 @@ function eventRow({ ev, cal }) {
 function visible(events) {
   return events.filter((x) => calOn(x.cal) && (x.ev.summary || "").trim() !== CONFIG.BRIEF_TITLE);
 }
+async function fetchTodayTasks() {
+  if (!getTodoistToken()) return [];
+  try {
+    const data = await todoistFetch("/tasks?filter=today");
+    const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || []);
+    return tasks;
+  } catch (e) { return []; }
+}
+
+function parseItemTime(isoStr) {
+  // Returns a Date or null
+  if (!isoStr) return null;
+  // Handles both "2026-06-13T14:00:00" and "2026-06-13T14:00:00Z"
+  return new Date(isoStr);
+}
+
 async function renderToday() {
   const today = todayISO();
-  const events = await fetchRange(today, 2);
-  $("hdr-date").textContent = fmt(new Date(), { weekday: "long", month: "long", day: "numeric" });
+  const now = new Date();
+  $("hdr-date").textContent = fmt(now, { weekday: "long", month: "long", day: "numeric" });
   $("hdr-user").textContent = state.email;
-  const brief = events.find(({ ev, cal }) =>
+
+  const [calEvents, tasks] = await Promise.all([fetchRange(today, 2), fetchTodayTasks()]);
+
+  // Brief banner
+  const brief = calEvents.find(({ ev, cal }) =>
     calOn(cal) && (ev.summary || "").trim() === CONFIG.BRIEF_TITLE && evDate(ev) === today);
   if (brief && brief.ev.description) { $("brief").hidden = false; $("brief-body").textContent = brief.ev.description; }
   else $("brief").hidden = true;
-  const vis = visible(events);
-  const todayTitle = $("today-title");
-  if (todayTitle) todayTitle.textContent = "";
-  fillList($("today-list"), vis.filter((x) => evDate(x.ev) === today), "Nothing scheduled — open day.");
-  const tmrTitle = $("tomorrow-title");
-  if (tmrTitle) tmrTitle.textContent = "Tomorrow";
-  fillList($("tomorrow-list"), vis.filter((x) => evDate(x.ev) === isoPlus(today, 1)), "Nothing yet.");
+
+  // Build unified item list for TODAY
+  const items = [];
+
+  // Calendar events — today only, not the brief
+  visible(calEvents).forEach(({ ev, cal }) => {
+    if (evDate(ev) !== today) return;
+    if ((ev.summary || "").trim() === CONFIG.BRIEF_TITLE) return;
+    const isAllDay = !ev.start.dateTime;
+    const time = isAllDay ? null : parseItemTime(ev.start.dateTime);
+    const endTime = isAllDay ? null : parseItemTime(ev.end?.dateTime);
+    items.push({ type: "event", title: ev.summary || "(no title)", time, endTime, allDay: isAllDay, id: ev.id, ev });
+  });
+
+  // Todoist tasks due today
+  tasks.forEach(t => {
+    // dueDateTime for timed tasks, dueDate for untimed
+    const dt = t.dueDatetime || t.due_datetime || t.dueDateTime || null;
+    const time = dt ? parseItemTime(dt) : null;
+    items.push({ type: "task", title: t.content, time, allDay: !dt, id: t.id, task: t });
+  });
+
+  // Sort: timed items by time, untimed/all-day at end
+  items.sort((a, b) => {
+    if (!a.time && !b.time) return 0;
+    if (!a.time) return 1;
+    if (!b.time) return -1;
+    return a.time - b.time;
+  });
+
+  // Tomorrow events (for collapsed section)
+  const tmrItems = visible(calEvents).filter(({ ev }) => evDate(ev) === isoPlus(today, 1));
+
+  buildTimeline(items, tmrItems, now);
+}
+
+function buildTimeline(items, tmrItems, now) {
+  const el = $("today-timeline");
+  el.innerHTML = "";
+
+  const timed = items.filter(i => i.time);
+  const untimed = items.filter(i => !i.time);
+  const nowMs = now.getTime();
+
+  // Find split point: first item in future
+  const firstFutureIdx = timed.findIndex(i => i.time > now);
+  const hasPast = firstFutureIdx > 0 || (firstFutureIdx === -1 && timed.length > 0);
+  const allPast = firstFutureIdx === -1 && timed.length > 0;
+
+  // Render timed items
+  let nowMarker = null;
+  timed.forEach((item, i) => {
+    const isFuture = item.time > now;
+    const isPast = !isFuture;
+
+    // Insert now marker before first future item
+    if (isFuture && (i === 0 || timed[i - 1].time <= now)) {
+      nowMarker = document.createElement("div");
+      nowMarker.className = "now-marker";
+      nowMarker.id = "now-marker";
+      nowMarker.innerHTML = `<span class="now-dot"></span><span class="now-label">Now</span><div class="now-line"></div>`;
+      el.appendChild(nowMarker);
+    }
+
+    el.appendChild(timelineRow(item, isPast));
+  });
+
+  // If all items are past, add now marker at end of timed section
+  if (allPast || timed.length === 0) {
+    nowMarker = document.createElement("div");
+    nowMarker.className = "now-marker";
+    nowMarker.id = "now-marker";
+    nowMarker.innerHTML = `<span class="now-dot"></span><span class="now-label">Now</span><div class="now-line"></div>`;
+    el.appendChild(nowMarker);
+  }
+
+  // Untimed / all-day tasks
+  if (untimed.length > 0) {
+    const label = document.createElement("div");
+    label.className = "timeline-section-label";
+    label.textContent = "Anytime today";
+    el.appendChild(label);
+    untimed.forEach(item => el.appendChild(timelineRow(item, false)));
+  }
+
+  // Empty state
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.style.paddingTop = "40px";
+    empty.textContent = "Nothing scheduled — open day.";
+    el.appendChild(empty);
+  }
+
+  // Collapsed tomorrow section
+  const tmrToggle = document.createElement("div");
+  tmrToggle.className = "tmr-toggle";
+  const tmrCount = tmrItems.length;
+  tmrToggle.innerHTML = `<span>Tomorrow</span><span class="tmr-count">${tmrCount > 0 ? tmrCount + " event" + (tmrCount !== 1 ? "s" : "") : "Nothing yet"}</span><span class="tmr-chevron">›</span>`;
+  const tmrBody = document.createElement("div");
+  tmrBody.className = "tmr-body";
+  tmrBody.hidden = true;
+  if (tmrCount > 0) {
+    tmrItems.forEach(({ ev }) => {
+      const isAllDay = !ev.start.dateTime;
+      const time = isAllDay ? null : parseItemTime(ev.start.dateTime);
+      const row = document.createElement("div");
+      row.className = "timeline-row past";
+      row.innerHTML = `<span class="tl-time">${time ? fmtTime(time) : "All day"}</span><span class="tl-title">${ev.summary || "(no title)"}</span>`;
+      tmrBody.appendChild(row);
+    });
+  } else {
+    tmrBody.innerHTML = `<div class="empty" style="padding:12px 0">Nothing yet.</div>`;
+  }
+  tmrToggle.addEventListener("click", () => {
+    const open = !tmrBody.hidden;
+    tmrBody.hidden = open;
+    tmrToggle.querySelector(".tmr-chevron").textContent = open ? "›" : "⌄";
+  });
+  el.appendChild(tmrToggle);
+  el.appendChild(tmrBody);
+
+  // Auto-scroll: put now-marker near top, showing ~24px of last past item
+  requestAnimationFrame(() => {
+    const marker = $("now-marker");
+    if (!marker) return;
+    const container = el;
+    const markerTop = marker.offsetTop;
+    // Peek at last past item if any
+    const peek = hasPast ? 28 : 0;
+    container.scrollTop = Math.max(0, markerTop - peek);
+  });
+}
+
+function fmtTime(date) {
+  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: CONFIG.TZ });
+}
+
+function timelineRow(item, isPast) {
+  const row = document.createElement("div");
+  row.className = "timeline-row" + (isPast ? " past" : "");
+
+  const timeEl = document.createElement("span");
+  timeEl.className = "tl-time";
+  if (item.time) {
+    timeEl.textContent = fmtTime(item.time);
+  } else {
+    timeEl.textContent = "";
+  }
+
+  const dot = document.createElement("span");
+  dot.className = "tl-dot " + item.type;
+
+  const titleEl = document.createElement("span");
+  titleEl.className = "tl-title";
+  titleEl.textContent = item.title;
+
+  if (item.endTime && !isPast) {
+    const dur = document.createElement("span");
+    dur.className = "tl-dur";
+    const mins = Math.round((item.endTime - item.time) / 60000);
+    if (mins > 0 && mins < 480) dur.textContent = mins < 60 ? `${mins}m` : `${Math.floor(mins/60)}h${mins%60 ? (mins%60)+"m" : ""}`;
+    row.append(timeEl, dot, titleEl, dur);
+  } else {
+    row.append(timeEl, dot, titleEl);
+  }
+
+  // Task: tap to complete
+  if (item.type === "task") {
+    row.style.cursor = "pointer";
+    row.addEventListener("click", () => completeTask(item.id));
+  }
+
+  return row;
 }
 async function renderWeek() {
   const monday = isoPlus(mondayOf(todayISO()), state.weekOffset * 7);
