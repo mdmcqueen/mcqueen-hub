@@ -162,7 +162,8 @@ async function renderLists() {
   tasksEl.innerHTML = "";
 
   try {
-    const projects = await todoistFetch("/projects");
+    const projectsData = await todoistFetch("/projects");
+    const projects = projectsData.projects || projectsData;
     // Top-level non-inbox projects
     state.todoistProjects = (projects || []).filter(p => !p.inboxProject && !p.parentId);
 
@@ -202,7 +203,8 @@ async function loadTasks() {
   const el = $("lists-tasks");
   el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   try {
-    const tasks = await todoistFetch("/tasks?project_id=" + state.activeListId);
+    const tasksData = await todoistFetch("/tasks?project_id=" + state.activeListId);
+    const tasks = tasksData.items || tasksData.tasks || tasksData;
     el.innerHTML = "";
     if (!tasks || tasks.length === 0) {
       el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
