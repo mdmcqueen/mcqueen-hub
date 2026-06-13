@@ -38,13 +38,9 @@ header { display: flex; justify-content: space-between; align-items: center;
   border: 1px solid var(--line); }
 
 /* Brief */
-.brief { margin: 8px 16px; background: var(--brief-bg); border: 1px solid var(--brief-line);
-  border-radius: 14px; overflow: hidden; }
-.brief-head { width: 100%; display: flex; justify-content: space-between; align-items: center;
-  padding: 12px 14px; background: none; border: 0; color: var(--ink); font-size: 0.95rem;
-  font-weight: 600; cursor: pointer; }
-.brief-body { padding: 0 14px 12px; white-space: pre-wrap; font-size: 0.88rem;
-  line-height: 1.45; max-height: 50dvh; overflow-y: auto; }
+
+
+
 
 /* Tabs / content */
 .tab { padding: 8px 16px 90px; }
@@ -198,3 +194,8 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .tmr-count { font-size: 0.8rem; color: var(--muted); }
 .tmr-chevron { color: var(--muted); font-size: 1rem; }
 .tmr-body { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+
+.brief-block { font-size: 0.88rem; color: var(--ink); line-height: 1.55;
+  white-space: pre-wrap; padding: 12px 0 8px; }
+.tmr-divider { font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); padding: 12px 0 6px; }

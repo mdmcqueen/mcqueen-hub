@@ -319,11 +319,10 @@ async function renderToday() {
 
   const [calEvents, tasks] = await Promise.all([fetchRange(today, 2), fetchTodayTasks()]);
 
-  // Brief banner
-  const brief = calEvents.find(({ ev, cal }) =>
+  // Find brief (passed to buildTimeline for Tomorrow section)
+  const briefEv = calEvents.find(({ ev, cal }) =>
     calOn(cal) && (ev.summary || "").trim() === CONFIG.BRIEF_TITLE && evDate(ev) === today);
-  if (brief && brief.ev.description) { $("brief").hidden = false; $("brief-body").textContent = brief.ev.description; }
-  else $("brief").hidden = true;
+  const briefText = briefEv?.ev?.description || null;
 
   // Build unified item list for TODAY
   const items = [];
@@ -358,10 +357,10 @@ async function renderToday() {
   // Tomorrow events (for collapsed section)
   const tmrItems = visible(calEvents).filter(({ ev }) => evDate(ev) === isoPlus(today, 1));
 
-  buildTimeline(items, tmrItems, now);
+  buildTimeline(items, tmrItems, now, briefText);
 }
 
-function buildTimeline(items, tmrItems, now) {
+function buildTimeline(items, tmrItems, now, briefText) {
   const el = $("today-timeline");
   el.innerHTML = "";
 
@@ -419,26 +418,43 @@ function buildTimeline(items, tmrItems, now) {
     el.appendChild(empty);
   }
 
-  // Collapsed tomorrow section
+  // Collapsed tomorrow + brief section
   const tmrToggle = document.createElement("div");
   tmrToggle.className = "tmr-toggle";
   const tmrCount = tmrItems.length;
-  tmrToggle.innerHTML = `<span>Tomorrow</span><span class="tmr-count">${tmrCount > 0 ? tmrCount + " event" + (tmrCount !== 1 ? "s" : "") : "Nothing yet"}</span><span class="tmr-chevron">›</span>`;
+  const hasBrief = !!briefText;
+  const tmrLabel = hasBrief ? "Tomorrow · 🌙" : "Tomorrow";
+  const tmrMeta = tmrCount > 0 ? tmrCount + " event" + (tmrCount !== 1 ? "s" : "") : (hasBrief ? "" : "Nothing yet");
+  tmrToggle.innerHTML = `<span>${tmrLabel}</span><span class="tmr-count">${tmrMeta}</span><span class="tmr-chevron">›</span>`;
+
   const tmrBody = document.createElement("div");
   tmrBody.className = "tmr-body";
   tmrBody.hidden = true;
+
+  // Tonight's brief first
+  if (hasBrief) {
+    const briefBlock = document.createElement("div");
+    briefBlock.className = "brief-block";
+    briefBlock.textContent = briefText;
+    tmrBody.appendChild(briefBlock);
+  }
+
+  // Tomorrow events
   if (tmrCount > 0) {
+    if (hasBrief) {
+      const divider = document.createElement("div");
+      divider.className = "tmr-divider";
+      divider.textContent = "Tomorrow's schedule";
+      tmrBody.appendChild(divider);
+    }
     tmrItems.forEach(({ ev }) => {
-      const isAllDay = !ev.start.dateTime;
-      const time = isAllDay ? null : parseItemTime(ev.start.dateTime);
-      const row = document.createElement("div");
-      row.className = "timeline-row past";
-      row.innerHTML = `<span class="tl-time">${time ? fmtTime(time) : "All day"}</span><span class="tl-title">${ev.summary || "(no title)"}</span>`;
-      tmrBody.appendChild(row);
+      ev._cal = ev._cal || { summary: "" };
+      tmrBody.appendChild(eventRow({ ev, cal: ev._cal }));
     });
-  } else {
+  } else if (!hasBrief) {
     tmrBody.innerHTML = `<div class="empty" style="padding:12px 0">Nothing yet.</div>`;
   }
+
   tmrToggle.addEventListener("click", () => {
     const open = !tmrBody.hidden;
     tmrBody.hidden = open;
@@ -853,10 +869,7 @@ function wireUI() {
   $("settings-back").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", () => { $("settings").hidden = true; });
   $("settings").addEventListener("click", (e) => { if (e.target === $("settings")) $("settings").hidden = true; });
-  $("brief-toggle").addEventListener("click", () => {
-    const b = $("brief-body"); b.hidden = !b.hidden;
-    $("brief-chevron").textContent = b.hidden ? "▾" : "▴";
-  });
+
   $("week-prev").addEventListener("click", () => { state.weekOffset--; renderWeek(); });
   $("week-next").addEventListener("click", () => { state.weekOffset++; renderWeek(); });
   $("week-today").addEventListener("click", () => { state.weekOffset = 0; renderWeek(); });
