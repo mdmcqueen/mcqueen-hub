@@ -135,10 +135,9 @@ const getTodoistToken = () => localStorage.getItem("hub.todoistToken") || "";
 async function todoistFetch(path, method = "GET", body = null) {
   const tok = getTodoistToken();
   if (!tok) throw new Error("no-token");
-  const opts = {
-    method,
-    headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
-  };
+  const headers = { Authorization: "Bearer " + tok };
+  if (body) headers["Content-Type"] = "application/json";
+  const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(CONFIG.TODOIST + path, opts);
   if (!r.ok) throw new Error("todoist-" + r.status);
