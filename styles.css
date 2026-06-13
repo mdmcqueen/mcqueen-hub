@@ -160,12 +160,14 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .modal-head { display: flex; justify-content: space-between; align-items: center;
   margin-bottom: 4px; }
 .cal-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
-.proj-sort-row { display: flex; align-items: center; gap: 12px; padding: 11px 2px;
-  border-bottom: 1px solid var(--line); touch-action: none; }
+.proj-sort-row { display: flex; align-items: center; gap: 10px; padding: 10px 2px;
+  border-bottom: 1px solid var(--line); }
 .proj-sort-row:last-child { border-bottom: none; }
-.proj-sort-row.dragging { opacity: 0.4; }
-.drag-handle { font-size: 1.1rem; color: var(--muted); cursor: grab; padding: 0 4px; user-select: none; }
 .proj-sort-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--accent); flex-shrink: 0; }
+.reorder-btn { border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 6px; width: 30px; height: 30px; font-size: 0.9rem; cursor: pointer;
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.reorder-btn:disabled { opacity: 0.25; cursor: default; }
 .settings-nav-row { display: flex; justify-content: space-between; align-items: center;
   padding: 14px 4px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 0.95rem; color: var(--ink); }
 .settings-nav-row:last-child { border-bottom: none; }

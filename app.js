@@ -530,72 +530,55 @@ function openSettingsPage(page) {
       projList.id = "proj-sort-list";
       body.append(projList);
 
-      const saveOrder = () => {
-        const order = [...projList.querySelectorAll(".proj-sort-row")].map(r => r.dataset.id);
-        localStorage.setItem("hub.projectOrder", JSON.stringify(order));
-        // Re-sort state.todoistProjects to match
-        const idMap = Object.fromEntries(state.todoistProjects.map(p => [p.id, p]));
-        state.todoistProjects = order.map(id => idMap[id]).filter(Boolean);
-        buildProjectBar();
+      const renderProjRows = () => {
+        projList.innerHTML = "";
+        const projectsOff2 = getProjectsOff();
+        state.todoistProjects.forEach((p, i) => {
+          const row = document.createElement("div");
+          row.className = "proj-sort-row";
+          row.dataset.id = p.id;
+
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = !projectsOff2.has(p.id);
+          cb.addEventListener("change", () => {
+            const off = getProjectsOff();
+            cb.checked ? off.delete(p.id) : off.add(p.id);
+            localStorage.setItem("hub.projectsOff", JSON.stringify([...off]));
+            buildProjectBar();
+          });
+
+          const name = document.createElement("span");
+          name.textContent = p.name;
+          name.style.flex = "1";
+
+          const moveUp = document.createElement("button");
+          moveUp.textContent = "↑";
+          moveUp.className = "reorder-btn";
+          moveUp.disabled = i === 0;
+          moveUp.addEventListener("click", () => {
+            [state.todoistProjects[i - 1], state.todoistProjects[i]] = [state.todoistProjects[i], state.todoistProjects[i - 1]];
+            localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
+            buildProjectBar();
+            renderProjRows();
+          });
+
+          const moveDown = document.createElement("button");
+          moveDown.textContent = "↓";
+          moveDown.className = "reorder-btn";
+          moveDown.disabled = i === state.todoistProjects.length - 1;
+          moveDown.addEventListener("click", () => {
+            [state.todoistProjects[i], state.todoistProjects[i + 1]] = [state.todoistProjects[i + 1], state.todoistProjects[i]];
+            localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
+            buildProjectBar();
+            renderProjRows();
+          });
+
+          row.append(cb, name, moveUp, moveDown);
+          projList.append(row);
+        });
       };
-
-      let dragSrc = null;
-      state.todoistProjects.forEach((p) => {
-        const row = document.createElement("div");
-        row.className = "proj-sort-row";
-        row.dataset.id = p.id;
-        row.draggable = true;
-
-        const handle = document.createElement("span");
-        handle.className = "drag-handle";
-        handle.textContent = "⠿";
-        handle.setAttribute("aria-hidden", "true");
-
-        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !projectsOff.has(p.id);
-        cb.addEventListener("change", () => {
-          const off = getProjectsOff();
-          cb.checked ? off.delete(p.id) : off.add(p.id);
-          localStorage.setItem("hub.projectsOff", JSON.stringify([...off]));
-          buildProjectBar();
-        });
-
-        const name = document.createElement("span"); name.textContent = p.name;
-        row.append(handle, cb, name);
-        projList.append(row);
-
-        // Desktop drag events
-        row.addEventListener("dragstart", (e) => { dragSrc = row; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
-        row.addEventListener("dragend", () => { dragSrc = null; row.classList.remove("dragging"); saveOrder(); });
-        row.addEventListener("dragover", (e) => { e.preventDefault(); if (dragSrc && dragSrc !== row) { const rect = row.getBoundingClientRect(); const mid = rect.top + rect.height / 2; dragSrc.parentNode.insertBefore(dragSrc, e.clientY < mid ? row : row.nextSibling); } });
-
-        // Touch drag for iOS
-        let touchStartY = 0, touchClone = null;
-        row.addEventListener("touchstart", (e) => {
-          dragSrc = row;
-          touchStartY = e.touches[0].clientY;
-          touchClone = row.cloneNode(true);
-          touchClone.style.cssText = `position:fixed;left:0;right:0;opacity:0.85;background:var(--card);z-index:9999;pointer-events:none;`;
-          touchClone.style.top = row.getBoundingClientRect().top + "px";
-          document.body.appendChild(touchClone);
-          row.style.opacity = "0.3";
-        }, { passive: true });
-        row.addEventListener("touchmove", (e) => {
-          e.preventDefault();
-          const dy = e.touches[0].clientY - touchStartY;
-          if (touchClone) touchClone.style.top = (row.getBoundingClientRect().top + dy) + "px";
-          const over = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY)?.closest(".proj-sort-row");
-          if (over && over !== dragSrc) {
-            const rect = over.getBoundingClientRect();
-            dragSrc.parentNode.insertBefore(dragSrc, e.touches[0].clientY < rect.top + rect.height / 2 ? over : over.nextSibling);
-          }
-        }, { passive: false });
-        row.addEventListener("touchend", () => {
-          if (touchClone) { touchClone.remove(); touchClone = null; }
-          row.style.opacity = "";
-          dragSrc = null;
-          saveOrder();
-        });
-      });
+      renderProjRows();
     }
   }
 }
@@ -609,6 +592,7 @@ function toggleTokenVisibility() {
 
 function saveTodoistToken() {
   const val = $("todoist-token-input").value.trim();
+  if (!val) { toast("Token can't be empty"); return; }
   localStorage.setItem("hub.todoistToken", val);
   $("settings").hidden = true;
   toast("Todoist token saved");
