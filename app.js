@@ -207,15 +207,15 @@ async function loadTasks() {
   el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   try {
     const tasksData = await todoistFetch("/tasks?project_id=" + state.activeListId);
-    const tasks = tasksData.items || tasksData.tasks || tasksData;
+    const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || tasksData.items || tasksData.results || []);
     el.innerHTML = "";
     if (!tasks || tasks.length === 0) {
       el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
     }
-    tasks.sort((a, b) => (a.order || 0) - (b.order || 0));
+    tasks.sort((a, b) => (a.child_order ?? a.order ?? 0) - (b.child_order ?? b.order ?? 0));
     tasks.forEach(t => el.appendChild(buildTaskRow(t)));
   } catch (e) {
-    el.innerHTML = `<div class="empty">Couldn't load tasks.</div>`;
+    el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
   }
 }
 
