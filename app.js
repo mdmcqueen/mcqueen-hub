@@ -594,10 +594,10 @@ function handleCapture(label) {
       toast("Add events directly in Google Calendar");
       break;
     case "Task":
-      openCapSheet("task", "New task…", null);
+      openCapSheet("task", "New task…", null, state.activeTab === "today" ? todayISO() : null);
       break;
     case "Reminder":
-      openCapSheet("reminder", "Remind me to…", null);
+      openCapSheet("reminder", "Remind me to…", null, state.activeTab === "today" ? todayISO() : null);
       break;
     case "Item":
       openCapSheet("item", "Add item…", state.activeListId);
@@ -612,15 +612,41 @@ function handleCapture(label) {
 }
 
 /* ---------- capture sheet ---------- */
-function openCapSheet(type, placeholder, projectId) {
+function openCapSheet(type, placeholder, projectId, dueDate) {
   const sheet = $("cap-sheet");
   const input = $("cap-input");
   input.placeholder = placeholder;
   input.value = "";
   sheet.dataset.type = type;
   sheet.dataset.project = projectId || "";
+
+  // Date chip — show for task and reminder types
+  const meta = $("cap-meta");
+  const chip = $("cap-due-chip");
+  const dateInput = $("cap-due-input");
+  if (type === "task" || type === "reminder") {
+    const defaultDate = dueDate || "";
+    dateInput.value = defaultDate;
+    chip.textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
+    chip.dataset.date = defaultDate;
+    meta.hidden = false;
+  } else {
+    meta.hidden = true;
+    dateInput.value = "";
+  }
+
   sheet.hidden = false;
   setTimeout(() => input.focus(), 80);
+}
+
+function fmtDueChip(isoDate) {
+  if (!isoDate) return "No date";
+  const today = todayISO();
+  const tomorrow = isoPlus(today, 1);
+  if (isoDate === today) return "Today";
+  if (isoDate === tomorrow) return "Tomorrow";
+  const d = new Date(isoDate + "T12:00:00");
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
 async function submitCapSheet() {
@@ -639,7 +665,8 @@ async function submitCapSheet() {
       toast("List created");
       renderLists();
     } else {
-      const dueString = type === "reminder" ? "today" : undefined;
+      const chipDate = $("cap-due-input").value;
+      const dueString = chipDate || (type === "reminder" ? "today" : undefined);
       await addTodoistTask(value, projectId, dueString);
       toast("Added!");
       if (type === "item" && state.activeTab === "lists") loadTasks();
@@ -890,6 +917,12 @@ function wireUI() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitCapSheet(); }
   });
   $("cap-sheet-cancel").addEventListener("click", () => { $("cap-sheet").hidden = true; });
+  $("cap-due-chip").addEventListener("click", () => { $("cap-due-input").showPicker?.() || $("cap-due-input").click(); });
+  $("cap-due-input").addEventListener("change", (e) => {
+    const val = e.target.value;
+    $("cap-due-chip").textContent = val ? fmtDueChip(val) : "No date";
+    $("cap-due-chip").dataset.date = val;
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && localStorage.getItem("hub.authed") === "1" && ensureToken()) refreshAll();
