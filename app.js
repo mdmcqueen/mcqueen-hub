@@ -535,12 +535,10 @@ function fillList(el, items, emptyMsg) {
 /* ---------- FAB ---------- */
 const FAB_OPTS = {
   today: [
-    { icon: "ti-calendar-plus", label: "Event" },
     { icon: "ti-circle-check", label: "Task" },
     { icon: "ti-bell", label: "Reminder" },
   ],
   week: [
-    { icon: "ti-calendar-plus", label: "Event" },
     { icon: "ti-circle-check", label: "Task" },
     { icon: "ti-bell", label: "Reminder" },
   ],
