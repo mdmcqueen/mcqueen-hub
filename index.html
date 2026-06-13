@@ -13,6 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -36,7 +37,7 @@
         <div id="hdr-date" class="hdr-date"></div>
         <div id="hdr-user" class="hdr-user muted small"></div>
       </div>
-      <button id="btn-settings" class="btn-icon" title="Calendars">⚙</button>
+      <button id="btn-settings" class="btn-icon" title="Settings">⚙</button>
     </header>
     <div id="ptr" class="ptr" hidden></div>
 
@@ -66,39 +67,57 @@
       <div id="week-list"></div>
     </main>
 
-    <!-- Lists tab (Session 2) -->
+    <!-- Lists tab -->
     <main id="tab-lists" class="tab" hidden>
-      <h2>Lists</h2>
-      <p class="muted">Coming in the next build — shared Todoist lists with check-off.</p>
+      <div id="lists-project-bar" class="lists-project-bar"></div>
+      <div id="lists-tasks" class="task-list"></div>
     </main>
 
-    <!-- Capture tab (Session 2) -->
-    <main id="tab-capture" class="tab" hidden>
-      <h2>Capture</h2>
-      <p class="muted">Coming in the next build — quick notes and flyer photos.</p>
-    </main>
+    <!-- FAB backdrop + flyout -->
+    <div id="fab-backdrop" class="fab-backdrop">
+      <div id="fab-flyout" class="fab-flyout"></div>
+    </div>
 
+    <!-- Capture input sheet -->
+    <div id="cap-sheet" class="cap-sheet" hidden>
+      <div class="cap-sheet-inner">
+        <input id="cap-input" class="cap-input" type="text" autocomplete="off" autocorrect="on">
+        <button id="cap-submit" class="cap-submit" aria-label="Submit"><i class="ti ti-arrow-up"></i></button>
+      </div>
+      <button id="cap-sheet-cancel" class="cap-sheet-cancel">Cancel</button>
+    </div>
+
+    <!-- Tab bar — divs to avoid browser button chrome -->
     <nav class="tabbar">
-      <button data-tab="today" class="active">Today</button>
-      <button data-tab="week">Week</button>
-      <button data-tab="lists">Lists</button>
-      <button data-tab="capture">＋</button>
+      <div class="tab-item active" id="tb-today" role="button" aria-label="Today">
+        <i class="ti ti-sun" aria-hidden="true"></i>Today
+      </div>
+      <div class="tab-item" id="tb-week" role="button" aria-label="Week">
+        <i class="ti ti-calendar-event" aria-hidden="true"></i>Week
+      </div>
+      <div class="tab-item" id="tb-lists" role="button" aria-label="Lists">
+        <i class="ti ti-clipboard-check" aria-hidden="true"></i>Lists
+      </div>
+      <div class="add-item" id="tb-add" role="button" aria-label="Add">
+        <i class="ti ti-plus" aria-hidden="true"></i>
+      </div>
     </nav>
   </section>
 
   <div id="toast" class="toast" hidden></div>
 
-  <!-- Calendar picker -->
+  <!-- Settings modal -->
   <div id="settings" class="modal" hidden>
     <div class="modal-card">
       <div class="modal-head">
-        <strong>Calendars</strong>
+        <strong>Settings</strong>
         <button id="settings-close" class="btn-icon">✕</button>
       </div>
-      <p class="muted small">Choose what shows in this app (per device).</p>
+      <p class="muted small" style="margin-bottom:8px;">Calendars shown on this device.</p>
       <div id="cal-list" class="cal-list"></div>
     </div>
   </div>
+
 </div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
