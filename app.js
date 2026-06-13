@@ -7,7 +7,7 @@ const CONFIG = {
   SCOPES: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email",
   TZ: "America/Los_Angeles",
   BRIEF_TITLE: "🌙 Daily Brief",
-  TODOIST: "https://api.todoist.com/rest/v2",
+  TODOIST: "https://white-thunder-5727.mdmcqueen.workers.dev",
 };
 
 const $ = (id) => document.getElementById(id);
