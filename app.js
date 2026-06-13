@@ -281,9 +281,26 @@ function visible(events) {
 async function fetchTodayTasks() {
   if (!getTodoistToken()) return [];
   try {
+    // Ensure projects are loaded so we can filter by visibility
+    if (!state.todoistProjects || state.todoistProjects.length === 0) {
+      const pd = await todoistFetch("/projects");
+      const allProj = Array.isArray(pd) ? pd : (pd.projects || pd.results || pd.items || []);
+      const savedOrder = JSON.parse(localStorage.getItem("hub.projectOrder") || "null");
+      state.todoistProjects = allProj.filter(p => !p.inboxProject && !p.parentId);
+      if (savedOrder) {
+        const idMap = Object.fromEntries(state.todoistProjects.map(p => [p.id, p]));
+        state.todoistProjects = savedOrder.map(id => idMap[id]).filter(Boolean)
+          .concat(state.todoistProjects.filter(p => !savedOrder.includes(p.id)));
+      }
+    }
+    const visibleIds = new Set(
+      state.todoistProjects
+        .filter(p => !getProjectsOff().has(p.id))
+        .map(p => p.id)
+    );
     const data = await todoistFetch("/tasks?filter=today");
     const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || []);
-    return tasks;
+    return tasks.filter(t => visibleIds.has(t.projectId || t.project_id));
   } catch (e) { return []; }
 }
 
@@ -318,6 +335,7 @@ async function renderToday() {
     const isAllDay = !ev.start.dateTime;
     const time = isAllDay ? null : parseItemTime(ev.start.dateTime);
     const endTime = isAllDay ? null : parseItemTime(ev.end?.dateTime);
+    ev._cal = cal; // attach for timelineRow
     items.push({ type: "event", title: ev.summary || "(no title)", time, endTime, allDay: isAllDay, id: ev.id, ev });
   });
 
@@ -446,40 +464,34 @@ function fmtTime(date) {
 }
 
 function timelineRow(item, isPast) {
+  if (item.type === "event") {
+    // Reuse existing eventRow structure, just mark past
+    const row = eventRow({ ev: item.ev, cal: item.ev._cal || { summary: "" } });
+    if (isPast) row.style.opacity = "0.38";
+    return row;
+  }
+  // Task row — matches Lists tab style but with time column prepended
   const row = document.createElement("div");
-  row.className = "timeline-row" + (isPast ? " past" : "");
+  row.className = "event"; // reuse event card style
+  if (isPast) row.style.opacity = "0.38";
 
-  const timeEl = document.createElement("span");
-  timeEl.className = "tl-time";
-  if (item.time) {
-    timeEl.textContent = fmtTime(item.time);
-  } else {
-    timeEl.textContent = "";
-  }
+  const timeEl = document.createElement("div");
+  timeEl.className = "time" + (item.time ? "" : " allday");
+  timeEl.textContent = item.time ? fmtTime(item.time) : "Anytime";
 
-  const dot = document.createElement("span");
-  dot.className = "tl-dot " + item.type;
+  const w = document.createElement("div"); w.className = "what";
+  // Checkbox
+  const cb = document.createElement("div"); cb.className = "task-cb";
+  cb.innerHTML = `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/></svg>`;
+  const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
+  const cbRow = document.createElement("div");
+  cbRow.style.cssText = "display:flex;align-items:center;gap:10px;";
+  cbRow.append(cb, title);
+  w.append(cbRow);
+  row.append(timeEl, w);
 
-  const titleEl = document.createElement("span");
-  titleEl.className = "tl-title";
-  titleEl.textContent = item.title;
-
-  if (item.endTime && !isPast) {
-    const dur = document.createElement("span");
-    dur.className = "tl-dur";
-    const mins = Math.round((item.endTime - item.time) / 60000);
-    if (mins > 0 && mins < 480) dur.textContent = mins < 60 ? `${mins}m` : `${Math.floor(mins/60)}h${mins%60 ? (mins%60)+"m" : ""}`;
-    row.append(timeEl, dot, titleEl, dur);
-  } else {
-    row.append(timeEl, dot, titleEl);
-  }
-
-  // Task: tap to complete
-  if (item.type === "task") {
-    row.style.cursor = "pointer";
-    row.addEventListener("click", () => completeTask(item.id));
-  }
-
+  row.style.cursor = "pointer";
+  row.addEventListener("click", () => completeTask(item.id));
   return row;
 }
 async function renderWeek() {
