@@ -184,7 +184,9 @@ async function renderLists() {
 function buildProjectBar() {
   const bar = $("lists-project-bar");
   bar.innerHTML = "";
-  state.todoistProjects.forEach(p => {
+  const projectsOff = getProjectsOff();
+  const visible = state.todoistProjects.filter(p => !projectsOff.has(p.id));
+  visible.forEach(p => {
     const btn = document.createElement("button");
     btn.className = "lists-project-btn" + (p.id === state.activeListId ? " active" : "");
     btn.textContent = p.name;
@@ -435,59 +437,108 @@ async function submitCapSheet() {
 }
 
 /* ---------- settings ---------- */
-function openSettings() {
-  const list = $("cal-list");
-  list.innerHTML = "";
-  [...state.cals]
-    .sort((a, b) => (a.summaryOverride || a.summary || "").localeCompare(b.summaryOverride || b.summary || ""))
-    .forEach((cal) => {
-      const row = document.createElement("label"); row.className = "cal-row";
-      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = calOn(cal);
-      cb.addEventListener("change", () => {
-        cb.checked ? state.calsOff.delete(cal.id) : state.calsOff.add(cal.id);
-        localStorage.setItem("hub.calsOff", JSON.stringify([...state.calsOff]));
-        renderToday(); renderWeek();
-      });
-      const name = document.createElement("span");
-      name.textContent = cal.summaryOverride || cal.summary || cal.id;
-      row.append(cb, name); list.append(row);
-    });
+const getProjectsOff = () => new Set(JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"));
 
-  // Todoist token row
-  const tokenRow = document.createElement("div");
-  tokenRow.className = "cal-row todoist-row";
-  tokenRow.innerHTML = `
-    <div style="font-size:0.9rem;font-weight:600;margin-bottom:8px;color:var(--ink);">Todoist API token</div>
-    <input type="password" id="todoist-token-input"
-      placeholder="Paste token…"
-      value="${getTodoistToken()}"
-      style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
-             font-size:0.88rem;background:var(--bg);color:var(--ink);font-family:inherit;">
-    <div style="display:flex;gap:8px;margin-top:8px;">
-      <button onclick="toggleTokenVisibility()" id="token-vis-btn"
-        style="flex:1;padding:9px;border:1px solid var(--line);border-radius:8px;
-               background:var(--card);color:var(--ink);font-size:0.9rem;
-               cursor:pointer;font-family:inherit;">Show</button>
-      <button onclick="saveTodoistToken()"
-        style="flex:2;padding:9px;border:0;border-radius:8px;
-               background:var(--accent);color:var(--accent-ink);font-weight:600;
-               cursor:pointer;font-family:inherit;font-size:0.9rem;">Save token</button>
-    </div>`;
-  list.append(tokenRow);
+function openSettings() {
+  $("settings-back").hidden = true;
+  $("settings-title").textContent = "Settings";
+  const body = $("settings-body");
+  body.innerHTML = "";
+
+  const navItems = [
+    { label: "Calendars", page: "calendars" },
+    { label: "Lists", page: "lists" },
+  ];
+  navItems.forEach(({ label, page }) => {
+    const row = document.createElement("div");
+    row.className = "settings-nav-row";
+    row.innerHTML = `<span>${label}</span><span class="settings-nav-arrow">›</span>`;
+    row.addEventListener("click", () => openSettingsPage(page));
+    body.appendChild(row);
+  });
 
   $("settings").hidden = false;
+}
+
+function openSettingsPage(page) {
+  $("settings-back").hidden = false;
+  const body = $("settings-body");
+  body.innerHTML = "";
+
+  if (page === "calendars") {
+    $("settings-title").textContent = "Calendars";
+    [...state.cals]
+      .sort((a, b) => (a.summaryOverride || a.summary || "").localeCompare(b.summaryOverride || b.summary || ""))
+      .forEach((cal) => {
+        const row = document.createElement("label"); row.className = "cal-row";
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = calOn(cal);
+        cb.addEventListener("change", () => {
+          cb.checked ? state.calsOff.delete(cal.id) : state.calsOff.add(cal.id);
+          localStorage.setItem("hub.calsOff", JSON.stringify([...state.calsOff]));
+          renderToday(); renderWeek();
+        });
+        const name = document.createElement("span");
+        name.textContent = cal.summaryOverride || cal.summary || cal.id;
+        row.append(cb, name); body.append(row);
+      });
+  }
+
+  if (page === "lists") {
+    $("settings-title").textContent = "Lists";
+    const projectsOff = getProjectsOff();
+
+    // Token section
+    const tokenSection = document.createElement("div");
+    tokenSection.innerHTML = `
+      <div class="settings-section-label">Todoist API token</div>
+      <input type="password" id="todoist-token-input"
+        placeholder="Paste token…"
+        value="${getTodoistToken()}"
+        style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+               font-size:0.88rem;background:var(--bg);color:var(--ink);font-family:inherit;box-sizing:border-box;">
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button id="token-vis-btn"
+          style="flex:1;padding:9px;border:1px solid var(--line);border-radius:8px;
+                 background:var(--card);color:var(--ink);font-size:0.9rem;
+                 cursor:pointer;font-family:inherit;">Show</button>
+        <button id="token-save-btn"
+          style="flex:2;padding:9px;border:0;border-radius:8px;
+                 background:var(--accent);color:var(--accent-ink);font-weight:600;
+                 cursor:pointer;font-family:inherit;font-size:0.9rem;">Save token</button>
+      </div>`;
+    body.append(tokenSection);
+    tokenSection.querySelector("#token-vis-btn").addEventListener("click", toggleTokenVisibility);
+    tokenSection.querySelector("#token-save-btn").addEventListener("click", saveTodoistToken);
+
+    // Projects section
+    if (state.todoistProjects && state.todoistProjects.length > 0) {
+      const projLabel = document.createElement("div");
+      projLabel.className = "settings-section-label";
+      projLabel.style.marginTop = "20px";
+      projLabel.textContent = "Projects shown";
+      body.append(projLabel);
+
+      state.todoistProjects.forEach((p) => {
+        const row = document.createElement("label"); row.className = "cal-row";
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !projectsOff.has(p.id);
+        cb.addEventListener("change", () => {
+          const off = getProjectsOff();
+          cb.checked ? off.delete(p.id) : off.add(p.id);
+          localStorage.setItem("hub.projectsOff", JSON.stringify([...off]));
+          buildProjectBar();
+        });
+        const name = document.createElement("span"); name.textContent = p.name;
+        row.append(cb, name); body.append(row);
+      });
+    }
+  }
 }
 
 function toggleTokenVisibility() {
   const input = $("todoist-token-input");
   const btn = $("token-vis-btn");
-  if (input.type === "password") {
-    input.type = "text";
-    btn.textContent = "Hide";
-  } else {
-    input.type = "password";
-    btn.textContent = "Show";
-  }
+  if (input.type === "password") { input.type = "text"; btn.textContent = "Hide"; }
+  else { input.type = "password"; btn.textContent = "Show"; }
 }
 
 function saveTodoistToken() {
@@ -552,6 +603,7 @@ function toast(msg) {
 function wireUI() {
   $("btn-signin").addEventListener("click", requestToken);
   $("btn-settings").addEventListener("click", openSettings);
+  $("settings-back").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", () => { $("settings").hidden = true; });
   $("settings").addEventListener("click", (e) => { if (e.target === $("settings")) $("settings").hidden = true; });
   $("brief-toggle").addEventListener("click", () => {
