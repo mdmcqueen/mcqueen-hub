@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>McQueen Hub</title>
+<meta name="description" content="McQueen family household hub">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hub">
+<meta name="theme-color" content="#101418" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Sign-in screen -->
+  <section id="screen-signin" class="screen" hidden>
+    <div class="signin-card">
+      <div class="logo">🏠</div>
+      <h1>McQueen Hub</h1>
+      <p class="muted">One place for the family's day.</p>
+      <button id="btn-signin" class="btn-primary">Sign in with Google</button>
+      <p class="muted small">Use your @gmail.com account. Calendar access is read-only.</p>
+    </div>
+  </section>
+
+  <!-- Main app -->
+  <section id="screen-main" class="screen" hidden>
+    <header>
+      <div>
+        <div id="hdr-date" class="hdr-date"></div>
+        <div id="hdr-user" class="hdr-user muted small"></div>
+      </div>
+      <button id="btn-settings" class="btn-icon" title="Settings">⚙</button>
+    </header>
+    <div id="ptr" class="ptr" hidden></div>
+
+    <!-- Brief banner -->
+    <div id="brief" class="brief" hidden>
+      <button id="brief-toggle" class="brief-head">
+        <span>🌙 Tonight's Brief</span><span id="brief-chevron">▾</span>
+      </button>
+      <div id="brief-body" class="brief-body" hidden></div>
+    </div>
+
+    <!-- Today tab -->
+    <main id="tab-today" class="tab">
+      <h2 id="today-title"></h2>
+      <div id="today-list" class="event-list"></div>
+      <h3 id="tomorrow-title" class="muted"></h3>
+      <div id="tomorrow-list" class="event-list compact"></div>
+    </main>
+
+    <!-- Week tab -->
+    <main id="tab-week" class="tab" hidden>
+      <div class="week-nav">
+        <button id="week-prev" class="btn-icon">‹</button>
+        <button id="week-today" class="week-label-btn"><span id="week-label"></span></button>
+        <button id="week-next" class="btn-icon">›</button>
+      </div>
+      <div id="week-list"></div>
+    </main>
+
+    <!-- Lists tab -->
+    <main id="tab-lists" class="tab" hidden>
+      <div id="lists-project-bar" class="lists-project-bar"></div>
+      <div id="lists-tasks" class="task-list"></div>
+    </main>
+
+    <!-- FAB backdrop + flyout -->
+    <div id="fab-backdrop" class="fab-backdrop">
+      <div id="fab-flyout" class="fab-flyout"></div>
+    </div>
+
+    <!-- Capture input sheet -->
+    <div id="cap-sheet" class="cap-sheet" hidden>
+      <div class="cap-sheet-inner">
+        <input id="cap-input" class="cap-input" type="text" autocomplete="off" autocorrect="on">
+        <button id="cap-submit" class="cap-submit" aria-label="Submit"><i class="ti ti-arrow-up"></i></button>
+      </div>
+      <button id="cap-sheet-cancel" class="cap-sheet-cancel">Cancel</button>
+    </div>
+
+    <!-- Tab bar — divs to avoid browser button chrome -->
+    <nav class="tabbar">
+      <div class="tab-item active" id="tb-today" role="button" aria-label="Today">
+        <i class="ti ti-sun" aria-hidden="true"></i>Today
+      </div>
+      <div class="tab-item" id="tb-week" role="button" aria-label="Week">
+        <i class="ti ti-calendar-event" aria-hidden="true"></i>Week
+      </div>
+      <div class="tab-item" id="tb-lists" role="button" aria-label="Lists">
+        <i class="ti ti-clipboard-check" aria-hidden="true"></i>Lists
+      </div>
+      <div class="add-item" id="tb-add" role="button" aria-label="Add">
+        <i class="ti ti-plus" aria-hidden="true"></i>
+      </div>
+    </nav>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <!-- Settings modal -->
+  <div id="settings" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <strong>Settings</strong>
+        <button id="settings-close" class="btn-icon">✕</button>
+      </div>
+      <p class="muted small" style="margin-bottom:8px;">Calendars shown on this device.</p>
+      <div id="cal-list" class="cal-list"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="app.js"></script>
+</body>
+</html>
