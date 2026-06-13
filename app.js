@@ -163,7 +163,10 @@ async function renderLists() {
 
   try {
     const projectsData = await todoistFetch("/projects");
-    const projects = projectsData.projects || projectsData;
+    // DEBUG: show raw API response shape
+    const _keys = Array.isArray(projectsData) ? "ARRAY len=" + projectsData.length : "OBJ keys=" + Object.keys(projectsData).join(",");
+    console.warn("Todoist /projects raw:", _keys, JSON.stringify(projectsData).slice(0, 200));
+    const projects = Array.isArray(projectsData) ? projectsData : (projectsData.projects || projectsData.results || projectsData.items || []);
     // Top-level non-inbox projects
     state.todoistProjects = (projects || []).filter(p => !p.inboxProject && !p.parentId);
 
