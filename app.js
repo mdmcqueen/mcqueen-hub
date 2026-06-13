@@ -456,22 +456,21 @@ function openSettings() {
   tokenRow.className = "cal-row todoist-row";
   tokenRow.innerHTML = `
     <div style="font-size:0.9rem;font-weight:600;margin-bottom:8px;color:var(--ink);">Todoist API token</div>
-    <div style="display:flex;gap:8px;align-items:center;">
-      <input type="password" id="todoist-token-input"
-        placeholder="Paste token from todoist.com/app/settings/integrations/developer"
-        value="${getTodoistToken()}"
-        style="flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
-               font-size:0.88rem;background:var(--bg);color:var(--ink);font-family:inherit;">
-      <button onclick="toggleTokenVisibility()"
-        id="token-vis-btn"
-        style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;
-               background:var(--card);color:var(--muted);font-size:0.85rem;
-               cursor:pointer;font-family:inherit;white-space:nowrap;">Show</button>
-    </div>
-    <button onclick="saveTodoistToken()"
-      style="margin-top:8px;width:100%;padding:9px;border:0;border-radius:8px;
-             background:var(--accent);color:var(--accent-ink);font-weight:600;
-             cursor:pointer;font-family:inherit;font-size:0.9rem;">Save token</button>`;
+    <input type="password" id="todoist-token-input"
+      placeholder="Paste token…"
+      value="${getTodoistToken()}"
+      style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+             font-size:0.88rem;background:var(--bg);color:var(--ink);font-family:inherit;">
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button onclick="toggleTokenVisibility()" id="token-vis-btn"
+        style="flex:1;padding:9px;border:1px solid var(--line);border-radius:8px;
+               background:var(--card);color:var(--ink);font-size:0.9rem;
+               cursor:pointer;font-family:inherit;">Show</button>
+      <button onclick="saveTodoistToken()"
+        style="flex:2;padding:9px;border:0;border-radius:8px;
+               background:var(--accent);color:var(--accent-ink);font-weight:600;
+               cursor:pointer;font-family:inherit;font-size:0.9rem;">Save token</button>
+    </div>`;
   list.append(tokenRow);
 
   $("settings").hidden = false;
