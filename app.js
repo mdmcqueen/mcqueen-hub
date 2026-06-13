@@ -176,7 +176,7 @@ async function renderLists() {
     await loadTasks();
   } catch (e) {
     bar.innerHTML = "";
-    tasksEl.innerHTML = `<p class="empty">Couldn't load lists. Check Todoist token in Settings.</p>`;
+    tasksEl.innerHTML = `<p class="empty">Error: ${e.message}</p>`;
   }
 }
 
