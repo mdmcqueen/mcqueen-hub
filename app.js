@@ -518,8 +518,39 @@ function openSettingsPage(page) {
       projLabel.textContent = "Projects shown";
       body.append(projLabel);
 
+      // Load saved order, fall back to current order
+      const savedOrder = JSON.parse(localStorage.getItem("hub.projectOrder") || "null");
+      if (savedOrder) {
+        const idMap = Object.fromEntries(state.todoistProjects.map(p => [p.id, p]));
+        state.todoistProjects = savedOrder.map(id => idMap[id]).filter(Boolean)
+          .concat(state.todoistProjects.filter(p => !savedOrder.includes(p.id)));
+      }
+
+      const projList = document.createElement("div");
+      projList.id = "proj-sort-list";
+      body.append(projList);
+
+      const saveOrder = () => {
+        const order = [...projList.querySelectorAll(".proj-sort-row")].map(r => r.dataset.id);
+        localStorage.setItem("hub.projectOrder", JSON.stringify(order));
+        // Re-sort state.todoistProjects to match
+        const idMap = Object.fromEntries(state.todoistProjects.map(p => [p.id, p]));
+        state.todoistProjects = order.map(id => idMap[id]).filter(Boolean);
+        buildProjectBar();
+      };
+
+      let dragSrc = null;
       state.todoistProjects.forEach((p) => {
-        const row = document.createElement("label"); row.className = "cal-row";
+        const row = document.createElement("div");
+        row.className = "proj-sort-row";
+        row.dataset.id = p.id;
+        row.draggable = true;
+
+        const handle = document.createElement("span");
+        handle.className = "drag-handle";
+        handle.textContent = "⠿";
+        handle.setAttribute("aria-hidden", "true");
+
         const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !projectsOff.has(p.id);
         cb.addEventListener("change", () => {
           const off = getProjectsOff();
@@ -527,8 +558,43 @@ function openSettingsPage(page) {
           localStorage.setItem("hub.projectsOff", JSON.stringify([...off]));
           buildProjectBar();
         });
+
         const name = document.createElement("span"); name.textContent = p.name;
-        row.append(cb, name); body.append(row);
+        row.append(handle, cb, name);
+        projList.append(row);
+
+        // Desktop drag events
+        row.addEventListener("dragstart", (e) => { dragSrc = row; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
+        row.addEventListener("dragend", () => { dragSrc = null; row.classList.remove("dragging"); saveOrder(); });
+        row.addEventListener("dragover", (e) => { e.preventDefault(); if (dragSrc && dragSrc !== row) { const rect = row.getBoundingClientRect(); const mid = rect.top + rect.height / 2; dragSrc.parentNode.insertBefore(dragSrc, e.clientY < mid ? row : row.nextSibling); } });
+
+        // Touch drag for iOS
+        let touchStartY = 0, touchClone = null;
+        row.addEventListener("touchstart", (e) => {
+          dragSrc = row;
+          touchStartY = e.touches[0].clientY;
+          touchClone = row.cloneNode(true);
+          touchClone.style.cssText = `position:fixed;left:0;right:0;opacity:0.85;background:var(--card);z-index:9999;pointer-events:none;`;
+          touchClone.style.top = row.getBoundingClientRect().top + "px";
+          document.body.appendChild(touchClone);
+          row.style.opacity = "0.3";
+        }, { passive: true });
+        row.addEventListener("touchmove", (e) => {
+          e.preventDefault();
+          const dy = e.touches[0].clientY - touchStartY;
+          if (touchClone) touchClone.style.top = (row.getBoundingClientRect().top + dy) + "px";
+          const over = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY)?.closest(".proj-sort-row");
+          if (over && over !== dragSrc) {
+            const rect = over.getBoundingClientRect();
+            dragSrc.parentNode.insertBefore(dragSrc, e.touches[0].clientY < rect.top + rect.height / 2 ? over : over.nextSibling);
+          }
+        }, { passive: false });
+        row.addEventListener("touchend", () => {
+          if (touchClone) { touchClone.remove(); touchClone = null; }
+          row.style.opacity = "";
+          dragSrc = null;
+          saveOrder();
+        });
       });
     }
   }
