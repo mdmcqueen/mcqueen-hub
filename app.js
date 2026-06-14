@@ -637,9 +637,9 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
     chip.textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
     chip.dataset.date = defaultDate;
     meta.hidden = false;
-    // Hide quick-pick if open
+    // Remove quick-pick if open
     const qp = $("cap-quick-pick");
-    if (qp) qp.hidden = true;
+    if (qp) qp.remove();
   } else {
     meta.hidden = true;
   }
