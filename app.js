@@ -221,12 +221,14 @@ async function loadTasks() {
 function buildTaskRow(task) {
   const row = document.createElement("div");
   row.className = "task-row"; row.id = "task-" + task.id;
-  const cb = document.createElement("div");
+  const cb = document.createElement("button");
   cb.className = "task-cb";
+  cb.type = "button";
+  cb.setAttribute("aria-label", "Complete task");
   cb.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
     <rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/>
   </svg>`;
-  cb.onclick = () => completeTask(task.id);
+  cb.addEventListener("click", (e) => { e.stopPropagation(); completeTask(task.id); });
   const label = document.createElement("span");
   label.className = "task-label"; label.textContent = task.content;
   row.append(cb, label);

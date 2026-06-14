@@ -113,6 +113,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-cb { flex-shrink: 0; cursor: pointer; line-height: 0; }
 .task-label { font-size: 0.95rem; color: var(--ink); }
 .task-done { opacity: 0.45; }
+.build-ver { font-size: 0.7rem; color: var(--muted); opacity: 0.5; margin-left: 6px; font-weight: 400; }
 .task-done .task-label { text-decoration: line-through; }
 .lists-setup { padding: 20px 0; text-align: center; color: var(--muted); }
 .lists-setup .btn-primary { margin-top: 12px; width: auto; padding: 10px 24px; }
