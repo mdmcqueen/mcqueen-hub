@@ -79,7 +79,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 /* Tab bar — div-based, no browser button chrome */
 .tabbar { position: fixed; bottom: 0; left: 0; right: 0; display: flex;
   background: var(--card); border-top: 1px solid var(--line);
-  padding: 4px 0 calc(4px + var(--safe-bottom)); z-index: 20; }
+  padding: 4px 72px calc(4px + var(--safe-bottom)) 0; z-index: 20; }
 .tab-item { flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 3px; padding: 8px 0 4px; color: var(--muted);
   font-size: 0.62rem; font-weight: 600; cursor: pointer; user-select: none;
