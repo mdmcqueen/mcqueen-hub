@@ -140,7 +140,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 
 .cap-input { flex: 1; padding: 10px 52px 10px 14px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--bg); color: var(--ink); font-size: 0.95rem; outline: none;
-  font-family: inherit; width: 100%; box-sizing: border-box; }
+  font-family: inherit; width: 100%; box-sizing: border-box; border-radius: 999px; }
 .cap-submit { position: absolute; right: 6px; width: 34px; height: 34px; border-radius: 50%;
   background: var(--accent); color: var(--accent-ink); border: 0; font-size: 1rem; cursor: pointer;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
