@@ -131,9 +131,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .cap-opt i { font-size: 1.1rem; color: var(--muted); }
 
 /* Capture input sheet */
-.cap-sheet { position: fixed; bottom: calc(60px + var(--safe-bottom)); left: 0; right: 0;
-  background: var(--card); border-top: 1px solid var(--line);
-  padding: 12px 16px calc(12px); z-index: 25; }
+.cap-sheet { position: fixed; bottom: calc(72px + var(--safe-bottom)); left: 12px; right: 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.13); padding: 10px 12px 12px; z-index: 25; }
 .cap-sheet-inner { display: flex; gap: 8px; align-items: center; }
 .cap-input { flex: 1; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--bg); color: var(--ink); font-size: 0.95rem; outline: none;
