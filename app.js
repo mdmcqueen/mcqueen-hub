@@ -630,18 +630,16 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
   sheet.dataset.project = projectId || "";
 
   // Date chip — show for task and reminder types
-  const meta = $("cap-meta");
   const chip = $("cap-due-chip");
+  const qp = $("cap-quick-pick");
+  if (qp) qp.remove();
   if (type === "task" || type === "reminder") {
     const defaultDate = dueDate || "";
     chip.textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
     chip.dataset.date = defaultDate;
-    meta.hidden = false;
-    // Remove quick-pick if open
-    const qp = $("cap-quick-pick");
-    if (qp) qp.remove();
+    chip.hidden = false;
   } else {
-    meta.hidden = true;
+    chip.hidden = true;
   }
 
   sheet.hidden = false;
@@ -927,6 +925,7 @@ function wireUI() {
   $("cap-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitCapSheet(); }
   });
+  $("cap-close-btn").addEventListener("click", () => closeFab());
   $("cap-due-chip").addEventListener("click", () => {
     let qp = $("cap-quick-pick");
     if (qp) { qp.remove(); return; }
