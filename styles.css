@@ -139,8 +139,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .cap-submit { width: 38px; height: 38px; border-radius: 50%; background: var(--accent);
   color: var(--accent-ink); border: 0; font-size: 1rem; cursor: pointer;
   display: flex; align-items: center; justify-content: center; }
-.cap-sheet-cancel { margin-top: 4px; width: 100%; padding: 6px; background: none;
-  border: 0; color: var(--muted); font-size: 0.85rem; cursor: pointer; font-family: inherit; }
+
 
 /* Toast */
 .toast { position: fixed; bottom: calc(72px + var(--safe-bottom)); left: 50%;

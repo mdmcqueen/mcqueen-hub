@@ -322,7 +322,6 @@ async function renderToday() {
   const today = todayISO();
   const now = new Date();
   $("hdr-date").textContent = fmt(now, { weekday: "long", month: "long", day: "numeric" });
-  $("hdr-user").textContent = state.email;
 
   const [calEvents, tasks] = await Promise.all([fetchRange(today, 2), fetchTodayTasks()]);
 
@@ -430,7 +429,7 @@ function buildTimeline(items, tmrItems, now, briefText) {
   tmrToggle.className = "tmr-toggle";
   const tmrCount = tmrItems.length;
   const hasBrief = !!briefText;
-  const tmrLabel = hasBrief ? "Tomorrow · 🌙" : "Tomorrow";
+  const tmrLabel = "Tomorrow";
   const tmrMeta = tmrCount > 0 ? tmrCount + " event" + (tmrCount !== 1 ? "s" : "") : (hasBrief ? "" : "Nothing yet");
   tmrToggle.innerHTML = `<span>${tmrLabel}</span><span class="tmr-count">${tmrMeta}</span><span class="tmr-chevron">›</span>`;
 
@@ -582,6 +581,9 @@ function closeFab() {
   state.fabOpen = false;
   $("tb-add").classList.remove("open");
   $("fab-backdrop").classList.remove("open");
+  $("cap-sheet").hidden = true;
+  const qp = $("cap-quick-pick");
+  if (qp) qp.hidden = true;
 }
 function buildFabFlyout() {
   const flyout = $("fab-flyout");
@@ -590,7 +592,7 @@ function buildFabFlyout() {
     const btn = document.createElement("div");
     btn.className = "cap-opt";
     btn.innerHTML = `<i class="ti ${o.icon}" aria-hidden="true"></i>${o.label}`;
-    btn.onclick = (e) => { e.stopPropagation(); closeFab(); handleCapture(o.label); };
+    btn.onclick = (e) => { e.stopPropagation(); $("fab-backdrop").classList.remove("open"); handleCapture(o.label); };
     flyout.appendChild(btn);
   });
 }
@@ -676,7 +678,9 @@ async function submitCapSheet() {
       const dueValue = chipDate || (type === "reminder" ? "today" : undefined);
       await addTodoistTask(value, projectId, dueValue);
       toast("Added!");
+      closeFab();
       if (type === "item" && state.activeTab === "lists") loadTasks();
+      if ((type === "task" || type === "reminder") && state.activeTab === "today") renderToday();
     }
   } catch (e) {
     toast("Couldn't save — check Todoist token in Settings");
@@ -923,7 +927,6 @@ function wireUI() {
   $("cap-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitCapSheet(); }
   });
-  $("cap-sheet-cancel").addEventListener("click", () => { $("cap-sheet").hidden = true; });
   $("cap-due-chip").addEventListener("click", () => {
     let qp = $("cap-quick-pick");
     if (qp) { qp.hidden = !qp.hidden; return; }
