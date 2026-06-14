@@ -203,13 +203,14 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 
 /* ── Capture sheet date picker ──────────────────── */
 .cap-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; padding-top: 8px; flex-wrap: wrap; }
-.cap-due-chip { display: inline-flex; align-items: center; padding: 5px 12px;
-  border-radius: 20px; border: 1px solid var(--accent); background: transparent;
-  color: var(--accent); font-size: 0.82rem; font-weight: 600;
-  cursor: pointer; font-family: inherit; align-self: flex-start; }
+.cap-due-chip, .cap-pick-btn, .cap-pick-date {
+  display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
+  border-radius: 20px; font-size: 0.82rem; font-family: inherit;
+  box-sizing: border-box; white-space: nowrap; }
+.cap-due-chip { border: 1px solid var(--accent); background: transparent;
+  color: var(--accent); font-weight: 600; cursor: pointer; }
 .cap-quick-pick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.cap-pick-btn { padding: 5px 14px; border-radius: 20px; border: 1px solid var(--line);
-  background: var(--card); color: var(--ink); font-size: 0.82rem;
-  cursor: pointer; font-family: inherit; }
-.cap-pick-date { padding: 5px 10px; border-radius: 20px; border: 1px solid var(--line);
-  background: var(--card); color: var(--ink); font-size: 0.82rem; font-family: inherit; }
+.cap-pick-btn { border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  cursor: pointer; }
+.cap-pick-date { border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  padding: 0 8px; }
