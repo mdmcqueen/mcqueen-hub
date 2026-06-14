@@ -138,10 +138,10 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   box-shadow: 0 4px 24px rgba(0,0,0,0.13); padding: 10px 12px 10px; z-index: 25; overflow: hidden; }
 .cap-sheet-inner { position: relative; display: flex; align-items: center; }
 
-.cap-input { flex: 1; padding: 10px 52px 10px 14px; border: 1px solid var(--line); border-radius: 10px;
+.cap-input { flex: 1; padding: 14px 50px 14px 16px; border: 1px solid var(--line);
   background: var(--bg); color: var(--ink); font-size: 0.95rem; outline: none;
   font-family: inherit; width: 100%; box-sizing: border-box; border-radius: 999px; }
-.cap-submit { position: absolute; right: 6px; width: 34px; height: 34px; border-radius: 50%;
+.cap-submit { position: absolute; right: 8px; width: 30px; height: 30px; border-radius: 50%;
   background: var(--accent); color: var(--accent-ink); border: 0; font-size: 1rem; cursor: pointer;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
