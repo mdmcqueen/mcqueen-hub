@@ -506,6 +506,7 @@ function timelineRow(item, isPast) {
   // Task row — matches Lists tab style but with time column prepended
   const row = document.createElement("div");
   row.className = "event"; // reuse event card style
+  row.id = "task-" + item.id;
   if (isPast) row.style.opacity = "0.38";
 
   const timeEl = document.createElement("div");
@@ -514,17 +515,15 @@ function timelineRow(item, isPast) {
 
   const w = document.createElement("div"); w.className = "what";
   // Checkbox
-  const cb = document.createElement("div"); cb.className = "task-cb";
+  const cb = document.createElement("button"); cb.className = "task-cb"; cb.type = "button";
   cb.innerHTML = `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/></svg>`;
+  cb.addEventListener("click", (e) => { e.stopPropagation(); completeTask(item.id); });
   const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
   const cbRow = document.createElement("div");
   cbRow.style.cssText = "display:flex;align-items:center;gap:10px;";
   cbRow.append(cb, title);
   w.append(cbRow);
   row.append(timeEl, w);
-
-  row.style.cursor = "pointer";
-  row.addEventListener("click", () => completeTask(item.id));
   return row;
 }
 async function renderWeek() {
