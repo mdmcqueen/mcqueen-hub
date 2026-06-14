@@ -929,16 +929,18 @@ function wireUI() {
   });
   $("cap-due-chip").addEventListener("click", () => {
     let qp = $("cap-quick-pick");
-    if (qp) { qp.hidden = !qp.hidden; return; }
-    // Build quick-pick row
+    if (qp) { qp.remove(); return; }
+    // Build quick-pick inline (to the right of chip, inside cap-meta)
     qp = document.createElement("div");
     qp.id = "cap-quick-pick";
     qp.className = "cap-quick-pick";
-    const opts = [
+    const currentDate = $("cap-due-chip").dataset.date;
+    const allOpts = [
       { label: "Today", date: todayISO() },
       { label: "Tomorrow", date: isoPlus(todayISO(), 1) },
     ];
-    opts.forEach(o => {
+    // Only show options that differ from the current selection
+    allOpts.filter(o => o.date !== currentDate).forEach(o => {
       const btn = document.createElement("button");
       btn.className = "cap-pick-btn";
       btn.textContent = o.label;
@@ -946,7 +948,7 @@ function wireUI() {
         e.stopPropagation();
         $("cap-due-chip").textContent = o.label;
         $("cap-due-chip").dataset.date = o.date;
-        qp.hidden = true;
+        qp.remove();
       });
       qp.appendChild(btn);
     });
@@ -954,12 +956,12 @@ function wireUI() {
     const dateInput = document.createElement("input");
     dateInput.type = "date";
     dateInput.className = "cap-pick-date";
-    dateInput.value = $("cap-due-chip").dataset.date || todayISO();
+    dateInput.value = currentDate || todayISO();
     dateInput.addEventListener("change", (e) => {
       const val = e.target.value;
       $("cap-due-chip").textContent = fmtDueChip(val);
       $("cap-due-chip").dataset.date = val;
-      qp.hidden = true;
+      qp.remove();
     });
     qp.appendChild(dateInput);
     $("cap-meta").appendChild(qp);
