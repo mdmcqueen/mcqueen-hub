@@ -133,7 +133,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 /* Capture input sheet */
 .cap-sheet { position: fixed; bottom: calc(72px + var(--safe-bottom)); left: 12px; right: 12px;
   background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.13); padding: 10px 12px 10px; z-index: 25; }
+  box-shadow: 0 4px 24px rgba(0,0,0,0.13); padding: 10px 12px 10px; z-index: 25; overflow: hidden; }
 .cap-sheet-inner { display: flex; gap: 8px; align-items: center; }
 .cap-input { flex: 1; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--bg); color: var(--ink); font-size: 0.95rem; outline: none;
@@ -209,7 +209,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   box-sizing: border-box; white-space: nowrap; }
 .cap-due-chip { border: 1px solid var(--accent); background: transparent;
   color: var(--accent); font-weight: 600; cursor: pointer; }
-.cap-quick-pick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cap-quick-pick { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
 .cap-pick-btn { border: 1px solid var(--line); background: var(--card); color: var(--ink);
   cursor: pointer; }
 .cap-pick-date { border: 1px solid var(--line); background: var(--card); color: var(--ink);

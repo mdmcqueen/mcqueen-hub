@@ -935,9 +935,12 @@ function wireUI() {
     qp.id = "cap-quick-pick";
     qp.className = "cap-quick-pick";
     const currentDate = $("cap-due-chip").dataset.date;
+    const todayDate = todayISO();
+    const tomorrowDate = isoPlus(todayDate, 1);
+    const isCustom = currentDate !== todayDate && currentDate !== tomorrowDate && currentDate !== "";
     const allOpts = [
-      { label: "Today", date: todayISO() },
-      { label: "Tomorrow", date: isoPlus(todayISO(), 1) },
+      { label: "Today", date: todayDate },
+      { label: "Tomorrow", date: tomorrowDate },
     ];
     // Only show options that differ from the current selection
     allOpts.filter(o => o.date !== currentDate).forEach(o => {
@@ -952,18 +955,21 @@ function wireUI() {
       });
       qp.appendChild(btn);
     });
-    // Custom date input
-    const dateInput = document.createElement("input");
-    dateInput.type = "date";
-    dateInput.className = "cap-pick-date";
-    dateInput.value = currentDate || todayISO();
-    dateInput.addEventListener("change", (e) => {
-      const val = e.target.value;
-      $("cap-due-chip").textContent = fmtDueChip(val);
-      $("cap-due-chip").dataset.date = val;
-      qp.remove();
-    });
-    qp.appendChild(dateInput);
+    // Date input: only show when current isn't already a custom date
+    // (avoids 3-item overflow; custom→Today/Tomorrow→tap again to get picker)
+    if (!isCustom) {
+      const dateInput = document.createElement("input");
+      dateInput.type = "date";
+      dateInput.className = "cap-pick-date";
+      dateInput.value = currentDate || todayDate;
+      dateInput.addEventListener("change", (e) => {
+        const val = e.target.value;
+        $("cap-due-chip").textContent = fmtDueChip(val);
+        $("cap-due-chip").dataset.date = val;
+        qp.remove();
+      });
+      qp.appendChild(dateInput);
+    }
     $("cap-meta").appendChild(qp);
   });
 
