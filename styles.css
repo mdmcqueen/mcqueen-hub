@@ -202,7 +202,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   letter-spacing: 0.05em; color: var(--muted); padding: 12px 0 6px; }
 
 /* ── Capture sheet date picker ──────────────────── */
-.cap-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; padding-top: 8px; height: 30px; overflow: hidden; }
+.cap-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; padding-top: 8px; height: 34px; overflow: hidden; }
 .cap-due-chip, .cap-pick-btn, .cap-pick-date {
   display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
   border-radius: 20px; font-size: 0.82rem; font-family: inherit;
