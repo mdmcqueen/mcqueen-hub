@@ -925,7 +925,6 @@ function wireUI() {
   $("cap-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitCapSheet(); }
   });
-  $("cap-close-btn").addEventListener("click", () => closeFab());
   $("cap-due-chip").addEventListener("click", () => {
     let qp = $("cap-quick-pick");
     if (qp) { qp.remove(); return; }

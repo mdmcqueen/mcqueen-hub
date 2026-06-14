@@ -131,14 +131,11 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .cap-opt i { font-size: 1.1rem; color: var(--muted); }
 
 /* Capture input sheet */
-.cap-sheet { position: fixed; bottom: calc(var(--safe-bottom) + 18px); left: 12px; right: 12px;
+.cap-sheet { position: fixed; bottom: calc(var(--safe-bottom) + 4px); left: 12px; right: 76px;
   background: var(--card); border: 1px solid var(--line); border-radius: 16px;
   box-shadow: 0 4px 24px rgba(0,0,0,0.13); padding: 10px 12px 10px; z-index: 25; overflow: hidden; }
 .cap-sheet-inner { display: flex; gap: 8px; align-items: center; }
-.cap-sheet-footer { display: flex; align-items: center; padding-top: 8px; gap: 8px; }
-.cap-close-btn { width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center;
-  justify-content: center; border: 0; background: none; color: #dc2626; font-size: 1.1rem;
-  cursor: pointer; margin-left: auto; }
+
 .cap-input { flex: 1; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--bg); color: var(--ink); font-size: 0.95rem; outline: none;
   font-family: inherit; }
