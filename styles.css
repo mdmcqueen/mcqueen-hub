@@ -86,10 +86,12 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   letter-spacing: 0.01em; -webkit-tap-highlight-color: transparent; }
 .tab-item i { font-size: 1.5rem; line-height: 1; }
 .tab-item.active { color: var(--accent); }
-.add-item { flex: 0 0 72px; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 3px; padding: 8px 0 4px; color: var(--muted);
+.add-item { position: fixed; right: 0; bottom: 0; width: 72px;
+  height: calc(49px + var(--safe-bottom)); padding-bottom: var(--safe-bottom);
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 3px; color: var(--muted);
   font-size: 0.62rem; font-weight: 600; cursor: pointer; user-select: none;
-  -webkit-tap-highlight-color: transparent; }
+  -webkit-tap-highlight-color: transparent; z-index: 30; }
 .add-item i { font-size: 1.5rem; line-height: 1;
   transition: transform 0.28s cubic-bezier(0.34,1.56,0.64,1); }
 .add-item.open { color: #dc2626; }
@@ -131,7 +133,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .cap-opt i { font-size: 1.1rem; color: var(--muted); }
 
 /* Capture input sheet */
-.cap-sheet { position: fixed; bottom: calc(var(--safe-bottom) + 4px); left: 12px; right: 76px;
+.cap-sheet { position: fixed; bottom: calc(var(--safe-bottom) + 4px); left: 12px; right: 12px;
   background: var(--card); border: 1px solid var(--line); border-radius: 16px;
   box-shadow: 0 4px 24px rgba(0,0,0,0.13); padding: 10px 12px 10px; z-index: 25; overflow: hidden; }
 .cap-sheet-inner { display: flex; gap: 8px; align-items: center; }
