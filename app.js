@@ -235,13 +235,22 @@ function buildTaskRow(task) {
 
 async function completeTask(id) {
   const row = $("task-" + id);
-  if (row) { row.style.opacity = "0.3"; row.style.pointerEvents = "none"; }
+  // Immediately show completed state
+  if (row) {
+    row.classList.add("task-done");
+    row.style.pointerEvents = "none";
+    // Swap checkbox to filled checkmark
+    const cb = row.querySelector(".task-cb");
+    if (cb) cb.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1.5" y="1.5" width="17" height="17" rx="4" fill="var(--accent)" stroke="var(--accent)" stroke-width="1.5"/>
+      <path d="M5.5 10.5L8.5 13.5L14.5 7" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
   try {
     await todoistFetch("/tasks/" + id + "/close", "POST");
-    setTimeout(() => { if (row) row.remove(); }, 400);
   } catch (e) {
     toast("Couldn't complete — try again");
-    if (row) { row.style.opacity = ""; row.style.pointerEvents = ""; }
+    if (row) { row.classList.remove("task-done"); row.style.pointerEvents = ""; }
   }
 }
 
