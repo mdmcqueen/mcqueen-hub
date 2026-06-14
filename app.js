@@ -245,10 +245,17 @@ async function completeTask(id) {
   }
 }
 
-async function addTodoistTask(content, projectId, dueString) {
+async function addTodoistTask(content, projectId, dueValue) {
   const body = { content };
   if (projectId) body.project_id = projectId;
-  if (dueString) body.due_string = dueString;
+  if (dueValue) {
+    // ISO date (YYYY-MM-DD) → due_date; human string ("today") → due_string
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dueValue)) {
+      body.due_date = dueValue;
+    } else {
+      body.due_string = dueValue;
+    }
+  }
   await todoistFetch("/tasks", "POST", body);
 }
 
@@ -623,16 +630,16 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
   // Date chip — show for task and reminder types
   const meta = $("cap-meta");
   const chip = $("cap-due-chip");
-  const dateInput = $("cap-due-input");
   if (type === "task" || type === "reminder") {
     const defaultDate = dueDate || "";
-    dateInput.value = defaultDate;
     chip.textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
     chip.dataset.date = defaultDate;
     meta.hidden = false;
+    // Hide quick-pick if open
+    const qp = $("cap-quick-pick");
+    if (qp) qp.hidden = true;
   } else {
     meta.hidden = true;
-    dateInput.value = "";
   }
 
   sheet.hidden = false;
@@ -665,9 +672,9 @@ async function submitCapSheet() {
       toast("List created");
       renderLists();
     } else {
-      const chipDate = $("cap-due-input").value;
-      const dueString = chipDate || (type === "reminder" ? "today" : undefined);
-      await addTodoistTask(value, projectId, dueString);
+      const chipDate = $("cap-due-chip").dataset.date || "";
+      const dueValue = chipDate || (type === "reminder" ? "today" : undefined);
+      await addTodoistTask(value, projectId, dueValue);
       toast("Added!");
       if (type === "item" && state.activeTab === "lists") loadTasks();
     }
@@ -917,11 +924,42 @@ function wireUI() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitCapSheet(); }
   });
   $("cap-sheet-cancel").addEventListener("click", () => { $("cap-sheet").hidden = true; });
-  $("cap-due-chip").addEventListener("click", () => { $("cap-due-input").showPicker?.() || $("cap-due-input").click(); });
-  $("cap-due-input").addEventListener("change", (e) => {
-    const val = e.target.value;
-    $("cap-due-chip").textContent = val ? fmtDueChip(val) : "No date";
-    $("cap-due-chip").dataset.date = val;
+  $("cap-due-chip").addEventListener("click", () => {
+    let qp = $("cap-quick-pick");
+    if (qp) { qp.hidden = !qp.hidden; return; }
+    // Build quick-pick row
+    qp = document.createElement("div");
+    qp.id = "cap-quick-pick";
+    qp.className = "cap-quick-pick";
+    const opts = [
+      { label: "Today", date: todayISO() },
+      { label: "Tomorrow", date: isoPlus(todayISO(), 1) },
+    ];
+    opts.forEach(o => {
+      const btn = document.createElement("button");
+      btn.className = "cap-pick-btn";
+      btn.textContent = o.label;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        $("cap-due-chip").textContent = o.label;
+        $("cap-due-chip").dataset.date = o.date;
+        qp.hidden = true;
+      });
+      qp.appendChild(btn);
+    });
+    // Custom date input
+    const dateInput = document.createElement("input");
+    dateInput.type = "date";
+    dateInput.className = "cap-pick-date";
+    dateInput.value = $("cap-due-chip").dataset.date || todayISO();
+    dateInput.addEventListener("change", (e) => {
+      const val = e.target.value;
+      $("cap-due-chip").textContent = fmtDueChip(val);
+      $("cap-due-chip").dataset.date = val;
+      qp.hidden = true;
+    });
+    qp.appendChild(dateInput);
+    $("cap-meta").appendChild(qp);
   });
 
   document.addEventListener("visibilitychange", () => {

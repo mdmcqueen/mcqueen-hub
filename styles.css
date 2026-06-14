@@ -199,3 +199,16 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   white-space: pre-wrap; padding: 12px 0 8px; }
 .tmr-divider { font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--muted); padding: 12px 0 6px; }
+
+/* ── Capture sheet date picker ──────────────────── */
+.cap-meta { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 8px; }
+.cap-due-chip { display: inline-flex; align-items: center; padding: 5px 12px;
+  border-radius: 20px; border: 1px solid var(--accent); background: transparent;
+  color: var(--accent); font-size: 0.82rem; font-weight: 600;
+  cursor: pointer; font-family: inherit; align-self: flex-start; }
+.cap-quick-pick { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cap-pick-btn { padding: 5px 14px; border-radius: 20px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); font-size: 0.82rem;
+  cursor: pointer; font-family: inherit; }
+.cap-pick-date { padding: 5px 10px; border-radius: 20px; border: 1px solid var(--line);
+  background: var(--card); color: var(--ink); font-size: 0.82rem; font-family: inherit; }
