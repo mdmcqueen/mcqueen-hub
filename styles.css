@@ -101,9 +101,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .lists-project-bar { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 12px;
   -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .lists-project-bar::-webkit-scrollbar { display: none; }
-.lists-project-btn { flex-shrink: 0; padding: 6px 14px; border: 1px solid var(--line);
-  border-radius: 20px; background: var(--card); color: var(--muted); font-size: 0.85rem;
-  font-weight: 600; cursor: pointer; white-space: nowrap; }
+.lists-project-btn { flex-shrink: 0; padding: 6px 14px; border: 0; outline: none;
+  -webkit-appearance: none; border-radius: 20px; background: var(--card); color: var(--muted);
+  font-size: 0.85rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .lists-project-btn.active { background: var(--accent); color: var(--accent-ink);
   border-color: var(--accent); }
 .task-list { display: flex; flex-direction: column; gap: 8px; }
@@ -177,6 +177,15 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .settings-nav-arrow { color: var(--muted); font-size: 1.2rem; }
 .settings-section-label { font-size: 0.78rem; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--muted); margin: 4px 0 8px; }
+.settings-token-input { width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; font-size: 0.88rem; background: var(--bg); color: var(--ink);
+  font-family: inherit; box-sizing: border-box; }
+.settings-token-actions { display: flex; gap: 8px; margin-top: 8px; }
+.settings-btn-secondary { flex: 1; padding: 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); font-size: 0.9rem; cursor: pointer; font-family: inherit; }
+.settings-btn-primary { flex: 2; padding: 9px; border: 0; border-radius: 8px;
+  background: var(--accent); color: var(--accent-ink); font-weight: 600; cursor: pointer;
+  font-family: inherit; font-size: 0.9rem; }
 .cal-row { display: flex; align-items: center; gap: 12px; padding: 10px 2px;
   border-bottom: 1px solid var(--line); font-size: 0.95rem; }
 .cal-row input { width: 20px; height: 20px; accent-color: var(--accent); }
@@ -208,7 +217,10 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   letter-spacing: 0.05em; color: var(--muted); padding: 12px 0 6px; }
 
 /* ── Capture sheet date picker ──────────────────── */
-.cap-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; flex: 1; height: 40px; overflow: hidden; }
+.cap-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; padding-top: 8px;
+  height: 40px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; }
+.cap-meta::-webkit-scrollbar { display: none; }
 .cap-due-chip, .cap-pick-btn, .cap-pick-date {
   display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
   border-radius: 20px; font-size: 0.82rem; font-family: inherit;

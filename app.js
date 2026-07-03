@@ -4,7 +4,8 @@
 
 const CONFIG = {
   CLIENT_ID: "508766830058-i6fta7vh37vu0o167vvsm74d2vr674dd.apps.googleusercontent.com",
-  SCOPES: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email",
+  SCOPES: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email",
+  SCOPE_VERSION: 2, // bump + it forces a re-consent (adds calendar.events for Event capture)
   TZ: "America/Los_Angeles",
   BRIEF_TITLE: "🌙 Daily Brief",
   TODOIST: "https://white-thunder-5727.mdmcqueen.workers.dev",
@@ -24,7 +25,23 @@ const state = {
   todoistProjects: [],
   activeListId: localStorage.getItem("hub.activeList") || null,
   fabOpen: false,
+  completedRecently: new Map(), // id -> { kind: 'today'|'list', data, expiresAt }
 };
+
+const CHECK_OPEN_SVG = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/>
+</svg>`;
+const CHECK_DONE_SVG = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1.5" y="1.5" width="17" height="17" rx="4" fill="var(--accent)" stroke="var(--accent)" stroke-width="1.5"/>
+  <path d="M5.5 10.5L8.5 13.5L14.5 7" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+function pruneCompletedRecently() {
+  const now = Date.now();
+  for (const [id, e] of state.completedRecently) {
+    if (e.expiresAt < now) state.completedRecently.delete(id);
+  }
+}
 
 /* ---------- date helpers ---------- */
 const fmt = (d, opts) => new Intl.DateTimeFormat("en-US", { timeZone: CONFIG.TZ, ...opts }).format(d);
@@ -51,16 +68,18 @@ function initAuth() {
     callback: onToken,
     error_callback: () => { showSignin(); },
   });
+  const savedScopeVer = Number(localStorage.getItem("hub.scopeVer") || 0);
+  const needsReconsent = savedScopeVer < CONFIG.SCOPE_VERSION;
   const cachedTok = localStorage.getItem("hub.tok");
   const cachedExp = Number(localStorage.getItem("hub.tokExp") || 0);
-  if (cachedTok && Date.now() < cachedExp - 60000) {
+  if (!needsReconsent && cachedTok && Date.now() < cachedExp - 60000) {
     state.token = cachedTok; state.tokenExp = cachedExp;
     showMain(); boot(); return;
   }
-  if (localStorage.getItem("hub.authed") === "1") requestToken(); else showSignin();
+  if (localStorage.getItem("hub.authed") === "1") requestToken(needsReconsent); else showSignin();
 }
-function requestToken() {
-  state.tokenClient.requestAccessToken({ prompt: "" });
+function requestToken(forceConsent) {
+  state.tokenClient.requestAccessToken({ prompt: forceConsent ? "consent" : "" });
 }
 async function onToken(resp) {
   if (resp.error) { showSignin(); return; }
@@ -69,6 +88,7 @@ async function onToken(resp) {
   localStorage.setItem("hub.authed", "1");
   localStorage.setItem("hub.tok", state.token);
   localStorage.setItem("hub.tokExp", String(state.tokenExp));
+  localStorage.setItem("hub.scopeVer", String(CONFIG.SCOPE_VERSION));
   if (!state.email) {
     try {
       const r = await gapiFetch("https://www.googleapis.com/oauth2/v2/userinfo");
@@ -190,7 +210,6 @@ function buildProjectBar() {
     const btn = document.createElement("button");
     btn.className = "lists-project-btn" + (p.id === state.activeListId ? " active" : "");
     btn.textContent = p.name;
-    btn.style.cssText = "border:0;outline:none;-webkit-appearance:none;";
     btn.onclick = () => {
       state.activeListId = p.id;
       localStorage.setItem("hub.activeList", p.id);
@@ -207,65 +226,71 @@ async function loadTasks() {
   try {
     const tasksData = await todoistFetch("/tasks?project_id=" + state.activeListId);
     const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || tasksData.items || tasksData.results || []);
+    pruneCompletedRecently();
+    const doneExtras = [...state.completedRecently.values()]
+      .filter(e => e.kind === "list" && e.data.projectId === state.activeListId)
+      .map(e => e.data.task);
     el.innerHTML = "";
-    if (!tasks || tasks.length === 0) {
+    if ((!tasks || tasks.length === 0) && doneExtras.length === 0) {
       el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
     }
     tasks.sort((a, b) => (a.child_order ?? a.order ?? 0) - (b.child_order ?? b.order ?? 0));
     tasks.forEach(t => el.appendChild(buildTaskRow(t)));
+    doneExtras.forEach(t => el.appendChild(buildTaskRow(t, true)));
   } catch (e) {
     el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
   }
 }
 
-function buildTaskRow(task) {
+function buildTaskRow(task, isDone) {
   const row = document.createElement("div");
-  row.className = "task-row"; row.id = "task-" + task.id;
+  row.className = "task-row" + (isDone ? " task-done" : ""); row.id = "task-" + task.id;
   const cb = document.createElement("button");
   cb.className = "task-cb";
   cb.type = "button";
   cb.setAttribute("aria-label", "Complete task");
-  cb.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/>
-  </svg>`;
-  cb.addEventListener("click", (e) => { e.stopPropagation(); completeTask(task.id); });
+  cb.innerHTML = isDone ? CHECK_DONE_SVG : CHECK_OPEN_SVG;
+  if (isDone) {
+    cb.disabled = true;
+  } else {
+    cb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      completeTask(task.id, { kind: "list", data: { task, projectId: state.activeListId } });
+    });
+  }
   const label = document.createElement("span");
   label.className = "task-label"; label.textContent = task.content;
   row.append(cb, label);
   return row;
 }
 
-async function completeTask(id) {
+async function completeTask(id, ctx) {
   const row = $("task-" + id);
   // Immediately show completed state
   if (row) {
     row.classList.add("task-done");
     row.style.pointerEvents = "none";
-    // Swap checkbox to filled checkmark
     const cb = row.querySelector(".task-cb");
-    if (cb) cb.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="1.5" y="1.5" width="17" height="17" rx="4" fill="var(--accent)" stroke="var(--accent)" stroke-width="1.5"/>
-      <path d="M5.5 10.5L8.5 13.5L14.5 7" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>`;
+    if (cb) cb.innerHTML = CHECK_DONE_SVG;
   }
+  // Remember it briefly so it survives the next re-render instead of vanishing
+  if (ctx) state.completedRecently.set(id, { ...ctx, expiresAt: Date.now() + 120000 });
   try {
     await todoistFetch("/tasks/" + id + "/close", "POST");
   } catch (e) {
     toast("Couldn't complete — try again");
     if (row) { row.classList.remove("task-done"); row.style.pointerEvents = ""; }
+    state.completedRecently.delete(id);
   }
 }
 
-async function addTodoistTask(content, projectId, dueValue) {
+async function addTodoistTask(content, projectId, due) {
   const body = { content };
   if (projectId) body.project_id = projectId;
-  if (dueValue) {
-    // ISO date (YYYY-MM-DD) → due_date; human string ("today") → due_string
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dueValue)) {
-      body.due_date = dueValue;
-    } else {
-      body.due_string = dueValue;
-    }
+  if (due) {
+    if (due.datetime) body.due_datetime = due.datetime;
+    else if (due.date) body.due_date = due.date;
+    else if (due.string) body.due_string = due.string;
   }
   await todoistFetch("/tasks", "POST", body);
 }
@@ -361,6 +386,16 @@ async function renderToday() {
     const dt = t.dueDatetime || t.due_datetime || t.dueDateTime || null;
     const time = dt ? parseItemTime(dt) : null;
     items.push({ type: "task", title: t.content, time, allDay: !dt, id: t.id, task: t });
+  });
+
+  // Merge in tasks completed moments ago — Todoist's "today" filter no longer
+  // returns them, but we keep showing them (dimmed/struck) briefly so the
+  // checkmark tap doesn't look like it silently failed.
+  pruneCompletedRecently();
+  state.completedRecently.forEach((entry, id) => {
+    if (entry.kind === "today" && !items.find(i => i.id === id)) {
+      items.push({ ...entry.data.item, isDone: true });
+    }
   });
 
   // Sort: timed items by time, untimed/all-day at end
@@ -503,11 +538,12 @@ function timelineRow(item, isPast) {
     if (isPast) row.style.opacity = "0.38";
     return row;
   }
+  const isDone = !!item.isDone;
   // Task row — matches Lists tab style but with time column prepended
   const row = document.createElement("div");
-  row.className = "event"; // reuse event card style
+  row.className = "event" + (isDone ? " task-done" : ""); // reuse event card style
   row.id = "task-" + item.id;
-  if (isPast) row.style.opacity = "0.38";
+  if (isPast && !isDone) row.style.opacity = "0.38";
 
   const timeEl = document.createElement("div");
   timeEl.className = "time" + (item.time ? "" : " allday");
@@ -516,8 +552,15 @@ function timelineRow(item, isPast) {
   const w = document.createElement("div"); w.className = "what";
   // Checkbox
   const cb = document.createElement("button"); cb.className = "task-cb"; cb.type = "button";
-  cb.innerHTML = `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/></svg>`;
-  cb.addEventListener("click", (e) => { e.stopPropagation(); completeTask(item.id); });
+  cb.innerHTML = isDone ? CHECK_DONE_SVG : `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/></svg>`;
+  if (isDone) {
+    cb.disabled = true;
+  } else {
+    cb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      completeTask(item.id, { kind: "today", data: { item } });
+    });
+  }
   const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
   const cbRow = document.createElement("div");
   cbRow.style.cssText = "display:flex;align-items:center;gap:10px;";
@@ -567,10 +610,12 @@ function fillList(el, items, emptyMsg) {
 /* ---------- FAB ---------- */
 const FAB_OPTS = {
   today: [
+    { icon: "ti-calendar-plus", label: "Event" },
     { icon: "ti-circle-check", label: "Task" },
     { icon: "ti-bell", label: "Reminder" },
   ],
   week: [
+    { icon: "ti-calendar-plus", label: "Event" },
     { icon: "ti-circle-check", label: "Task" },
     { icon: "ti-bell", label: "Reminder" },
   ],
@@ -610,7 +655,7 @@ function buildFabFlyout() {
 function handleCapture(label) {
   switch (label) {
     case "Event":
-      toast("Add events directly in Google Calendar");
+      openCapSheet("event", "Event title…", null, todayISO());
       break;
     case "Task":
       openCapSheet("task", "New task…", null, state.activeTab === "today" ? todayISO() : null);
@@ -639,17 +684,24 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
   sheet.dataset.type = type;
   sheet.dataset.project = projectId || "";
 
-  // Date chip — show for task and reminder types
+  // Date + time chips — show for task, reminder, and event types
   const chip = $("cap-due-chip");
+  const timeChip = $("cap-time-chip");
   const qp = $("cap-quick-pick");
+  const tp = $("cap-time-pick");
   if (qp) qp.remove();
-  if (type === "task" || type === "reminder") {
+  if (tp) tp.remove();
+  if (type === "task" || type === "reminder" || type === "event") {
     const defaultDate = dueDate || "";
     chip.textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
     chip.dataset.date = defaultDate;
     chip.hidden = false;
+    timeChip.dataset.time = "";
+    timeChip.textContent = "No time";
+    timeChip.hidden = false;
   } else {
     chip.hidden = true;
+    timeChip.hidden = true;
   }
 
   sheet.hidden = false;
@@ -666,6 +718,19 @@ function fmtDueChip(isoDate) {
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
+function fmtTimeChip(hhmm) {
+  if (!hhmm) return "No time";
+  const [h, m] = hhmm.split(":").map(Number);
+  const d = new Date(); d.setHours(h, m, 0, 0);
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+// NOTE: assumes the device's local timezone matches CONFIG.TZ (America/Los_Angeles),
+// consistent with how the rest of the app treats browser-local time as Pacific time.
+function localToUTCISO(dateISO, timeHHMM) {
+  return new Date(`${dateISO}T${timeHHMM}:00`).toISOString();
+}
+
 async function submitCapSheet() {
   const sheet = $("cap-sheet");
   const input = $("cap-input");
@@ -675,24 +740,70 @@ async function submitCapSheet() {
   if (!value) { sheet.hidden = true; return; }
   sheet.hidden = true;
 
+  const chipDate = $("cap-due-chip").dataset.date || "";
+  const chipTime = $("cap-time-chip").dataset.time || "";
+
   try {
+    if (type === "event") {
+      await addCalendarEvent(value, chipDate || todayISO(), chipTime);
+      toast("Event added");
+      closeFab();
+      if (state.activeTab === "today") renderToday();
+      if (state.activeTab === "week") renderWeek();
+      return;
+    }
     if (!getTodoistToken()) { toast("Set a Todoist token in Settings first"); return; }
     if (type === "newlist") {
       await createTodoistProject(value);
       toast("List created");
       renderLists();
     } else {
-      const chipDate = $("cap-due-chip").dataset.date || "";
-      const dueValue = chipDate || (type === "reminder" ? "today" : undefined);
-      await addTodoistTask(value, projectId, dueValue);
+      let due = null;
+      if (chipDate && chipTime) due = { datetime: localToUTCISO(chipDate, chipTime) };
+      else if (chipDate) due = { date: chipDate };
+      else if (type === "reminder") due = { string: "today" };
+      await addTodoistTask(value, projectId, due);
       toast("Added!");
       closeFab();
       if (type === "item" && state.activeTab === "lists") loadTasks();
       if ((type === "task" || type === "reminder") && state.activeTab === "today") renderToday();
     }
   } catch (e) {
-    toast("Couldn't save — check Todoist token in Settings");
+    if (String(e.message).startsWith("cal-403")) {
+      toast("Re-connect Google Calendar access, then try again");
+      requestToken(true);
+    } else if (type === "event") {
+      toast("Couldn't add event — try again");
+    } else {
+      toast("Couldn't save — check Todoist token in Settings");
+    }
   }
+}
+
+async function addCalendarEvent(title, dateISO, timeHHMM) {
+  let body;
+  if (timeHHMM) {
+    const startISO = localToUTCISO(dateISO, timeHHMM);
+    const endISO = new Date(new Date(startISO).getTime() + 60 * 60000).toISOString();
+    body = {
+      summary: title,
+      start: { dateTime: startISO, timeZone: CONFIG.TZ },
+      end: { dateTime: endISO, timeZone: CONFIG.TZ },
+    };
+  } else {
+    body = {
+      summary: title,
+      start: { date: dateISO },
+      end: { date: isoPlus(dateISO, 1) },
+    };
+  }
+  const r = await fetch(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+    { method: "POST", headers: { Authorization: "Bearer " + state.token, "Content-Type": "application/json" }, body: JSON.stringify(body) }
+  );
+  if (!r.ok) throw new Error("cal-" + r.status);
+  state.ranges = {}; // invalidate cache so the new event shows up right away
+  return r.json();
 }
 
 /* ---------- settings ---------- */
@@ -750,20 +861,11 @@ function openSettingsPage(page) {
     const tokenSection = document.createElement("div");
     tokenSection.innerHTML = `
       <div class="settings-section-label">Todoist API token</div>
-      <input type="password" id="todoist-token-input"
-        placeholder="Paste token…"
-        value="${getTodoistToken()}"
-        style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
-               font-size:0.88rem;background:var(--bg);color:var(--ink);font-family:inherit;box-sizing:border-box;">
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button id="token-vis-btn"
-          style="flex:1;padding:9px;border:1px solid var(--line);border-radius:8px;
-                 background:var(--card);color:var(--ink);font-size:0.9rem;
-                 cursor:pointer;font-family:inherit;">Show</button>
-        <button id="token-save-btn"
-          style="flex:2;padding:9px;border:0;border-radius:8px;
-                 background:var(--accent);color:var(--accent-ink);font-weight:600;
-                 cursor:pointer;font-family:inherit;font-size:0.9rem;">Save token</button>
+      <input type="password" id="todoist-token-input" class="settings-token-input"
+        placeholder="Paste token…" value="${getTodoistToken()}">
+      <div class="settings-token-actions">
+        <button id="token-vis-btn" class="settings-btn-secondary">Show</button>
+        <button id="token-save-btn" class="settings-btn-primary">Save token</button>
       </div>`;
     body.append(tokenSection);
     tokenSection.querySelector("#token-vis-btn").addEventListener("click", toggleTokenVisibility);
@@ -910,7 +1012,7 @@ function toast(msg) {
 }
 
 function wireUI() {
-  $("btn-signin").addEventListener("click", requestToken);
+  $("btn-signin").addEventListener("click", () => requestToken(true));
   $("btn-settings").addEventListener("click", openSettings);
   $("settings-back").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", () => { $("settings").hidden = true; });
@@ -938,6 +1040,8 @@ function wireUI() {
   $("cap-due-chip").addEventListener("click", () => {
     let qp = $("cap-quick-pick");
     if (qp) { qp.remove(); return; }
+    const tp = $("cap-time-pick");
+    if (tp) tp.remove();
     // Build quick-pick inline (to the right of chip, inside cap-meta)
     qp = document.createElement("div");
     qp.id = "cap-quick-pick";
@@ -979,6 +1083,36 @@ function wireUI() {
       qp.appendChild(dateInput);
     }
     $("cap-meta").appendChild(qp);
+  });
+  $("cap-time-chip").addEventListener("click", () => {
+    let tp = $("cap-time-pick");
+    if (tp) { tp.remove(); return; }
+    const dp = $("cap-quick-pick");
+    if (dp) dp.remove();
+    tp = document.createElement("div");
+    tp.id = "cap-time-pick";
+    tp.className = "cap-quick-pick";
+    const noTimeBtn = document.createElement("button");
+    noTimeBtn.className = "cap-pick-btn";
+    noTimeBtn.textContent = "No time";
+    noTimeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      $("cap-time-chip").dataset.time = "";
+      $("cap-time-chip").textContent = "No time";
+      tp.remove();
+    });
+    const timeInput = document.createElement("input");
+    timeInput.type = "time";
+    timeInput.className = "cap-pick-date";
+    timeInput.value = $("cap-time-chip").dataset.time || "";
+    timeInput.addEventListener("change", (e) => {
+      const val = e.target.value;
+      $("cap-time-chip").dataset.time = val;
+      $("cap-time-chip").textContent = fmtTimeChip(val);
+      tp.remove();
+    });
+    tp.append(noTimeBtn, timeInput);
+    $("cap-meta").appendChild(tp);
   });
 
   document.addEventListener("visibilitychange", () => {
