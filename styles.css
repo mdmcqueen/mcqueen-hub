@@ -110,7 +110,8 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-row { display: flex; align-items: center; gap: 12px; background: var(--card);
   border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px;
   transition: opacity 0.3s; }
-.task-cb { flex-shrink: 0; cursor: pointer; line-height: 0; }
+.task-cb { flex-shrink: 0; cursor: pointer; line-height: 0; border: 0; background: none;
+  padding: 0; margin: 0; -webkit-appearance: none; appearance: none; }
 .task-label { font-size: 0.95rem; color: var(--ink); }
 .task-done { opacity: 0.45; }
 .build-ver { font-size: 0.7rem; color: var(--muted); opacity: 0.5; margin-left: 6px; font-weight: 400; }

@@ -249,16 +249,14 @@ function buildTaskRow(task, isDone) {
   const cb = document.createElement("button");
   cb.className = "task-cb";
   cb.type = "button";
-  cb.setAttribute("aria-label", "Complete task");
+  cb.dataset.done = isDone ? "1" : "0";
+  cb.setAttribute("aria-label", "Toggle complete");
   cb.innerHTML = isDone ? CHECK_DONE_SVG : CHECK_OPEN_SVG;
-  if (isDone) {
-    cb.disabled = true;
-  } else {
-    cb.addEventListener("click", (e) => {
-      e.stopPropagation();
-      completeTask(task.id, { kind: "list", data: { task, projectId: state.activeListId } });
-    });
-  }
+  cb.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (cb.dataset.done === "1") uncompleteTask(task.id);
+    else completeTask(task.id, { kind: "list", data: { task, projectId: state.activeListId } });
+  });
   const label = document.createElement("span");
   label.className = "task-label"; label.textContent = task.content;
   row.append(cb, label);
@@ -267,12 +265,11 @@ function buildTaskRow(task, isDone) {
 
 async function completeTask(id, ctx) {
   const row = $("task-" + id);
-  // Immediately show completed state
+  // Immediately show completed state — checkbox stays clickable so it can be undone
   if (row) {
     row.classList.add("task-done");
-    row.style.pointerEvents = "none";
     const cb = row.querySelector(".task-cb");
-    if (cb) cb.innerHTML = CHECK_DONE_SVG;
+    if (cb) { cb.innerHTML = CHECK_DONE_SVG; cb.dataset.done = "1"; }
   }
   // Remember it briefly so it survives the next re-render instead of vanishing
   if (ctx) state.completedRecently.set(id, { ...ctx, expiresAt: Date.now() + 120000 });
@@ -280,8 +277,32 @@ async function completeTask(id, ctx) {
     await todoistFetch("/tasks/" + id + "/close", "POST");
   } catch (e) {
     toast("Couldn't complete — try again");
-    if (row) { row.classList.remove("task-done"); row.style.pointerEvents = ""; }
+    if (row) {
+      row.classList.remove("task-done");
+      const cb = row.querySelector(".task-cb");
+      if (cb) { cb.innerHTML = CHECK_OPEN_SVG; cb.dataset.done = "0"; }
+    }
     state.completedRecently.delete(id);
+  }
+}
+
+async function uncompleteTask(id) {
+  const row = $("task-" + id);
+  if (row) {
+    row.classList.remove("task-done");
+    const cb = row.querySelector(".task-cb");
+    if (cb) { cb.innerHTML = CHECK_OPEN_SVG; cb.dataset.done = "0"; }
+  }
+  state.completedRecently.delete(id);
+  try {
+    await todoistFetch("/tasks/" + id + "/reopen", "POST");
+  } catch (e) {
+    toast("Couldn't undo — try again");
+    if (row) {
+      row.classList.add("task-done");
+      const cb = row.querySelector(".task-cb");
+      if (cb) { cb.innerHTML = CHECK_DONE_SVG; cb.dataset.done = "1"; }
+    }
   }
 }
 
@@ -325,16 +346,20 @@ function visible(events) {
 async function fetchTodayTasks() {
   if (!getTodoistToken()) return [];
   try {
-    // Ensure projects are loaded so we can filter by visibility
-    if (!state.todoistProjects || state.todoistProjects.length === 0) {
+    // Ensure projects (and the Inbox id) are loaded so we can filter by visibility
+    if (!state.todoistProjects || state.todoistProjects.length === 0 || state.todoistInboxId == null) {
       const pd = await todoistFetch("/projects");
       const allProj = Array.isArray(pd) ? pd : (pd.projects || pd.results || pd.items || []);
-      const savedOrder = JSON.parse(localStorage.getItem("hub.projectOrder") || "null");
-      state.todoistProjects = allProj.filter(p => !p.inboxProject && !p.parentId);
-      if (savedOrder) {
-        const idMap = Object.fromEntries(state.todoistProjects.map(p => [p.id, p]));
-        state.todoistProjects = savedOrder.map(id => idMap[id]).filter(Boolean)
-          .concat(state.todoistProjects.filter(p => !savedOrder.includes(p.id)));
+      const inbox = allProj.find(p => p.inboxProject);
+      state.todoistInboxId = inbox ? inbox.id : state.todoistInboxId;
+      if (!state.todoistProjects || state.todoistProjects.length === 0) {
+        const savedOrder = JSON.parse(localStorage.getItem("hub.projectOrder") || "null");
+        state.todoistProjects = allProj.filter(p => !p.inboxProject && !p.parentId);
+        if (savedOrder) {
+          const idMap = Object.fromEntries(state.todoistProjects.map(p => [p.id, p]));
+          state.todoistProjects = savedOrder.map(id => idMap[id]).filter(Boolean)
+            .concat(state.todoistProjects.filter(p => !savedOrder.includes(p.id)));
+        }
       }
     }
     const visibleIds = new Set(
@@ -342,6 +367,9 @@ async function fetchTodayTasks() {
         .filter(p => !getProjectsOff().has(p.id))
         .map(p => p.id)
     );
+    // Quick-added tasks (Today/Week FAB) have no project and land in Inbox —
+    // Inbox has no visibility toggle in Settings, so always treat it as shown.
+    if (state.todoistInboxId) visibleIds.add(state.todoistInboxId);
     const data = await todoistFetch("/tasks?filter=today");
     const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || []);
     return tasks.filter(t => visibleIds.has(t.projectId || t.project_id));
@@ -553,15 +581,13 @@ function timelineRow(item, isPast) {
   const w = document.createElement("div"); w.className = "what";
   // Checkbox
   const cb = document.createElement("button"); cb.className = "task-cb"; cb.type = "button";
-  cb.innerHTML = isDone ? CHECK_DONE_SVG : `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1.5" y="1.5" width="17" height="17" rx="4" stroke="var(--line)" stroke-width="1.5"/></svg>`;
-  if (isDone) {
-    cb.disabled = true;
-  } else {
-    cb.addEventListener("click", (e) => {
-      e.stopPropagation();
-      completeTask(item.id, { kind: "today", data: { item } });
-    });
-  }
+  cb.dataset.done = isDone ? "1" : "0";
+  cb.innerHTML = isDone ? CHECK_DONE_SVG : CHECK_OPEN_SVG;
+  cb.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (cb.dataset.done === "1") uncompleteTask(item.id);
+    else completeTask(item.id, { kind: "today", data: { item } });
+  });
   const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
   const cbRow = document.createElement("div");
   cbRow.style.cssText = "display:flex;align-items:center;gap:10px;";
