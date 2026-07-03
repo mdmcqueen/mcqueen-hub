@@ -4,8 +4,8 @@
 
 const CONFIG = {
   CLIENT_ID: "508766830058-i6fta7vh37vu0o167vvsm74d2vr674dd.apps.googleusercontent.com",
-  SCOPES: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email",
-  SCOPE_VERSION: 2, // bump + it forces a re-consent (adds calendar.events for Event capture)
+  SCOPES: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/userinfo.email",
+  SCOPE_VERSION: 3, // bump + it forces a re-consent (v3 adds drive.appdata for settings backup)
   TZ: "America/Los_Angeles",
   BRIEF_TITLE: "🌙 Daily Brief",
   TODOIST: "https://white-thunder-5727.mdmcqueen.workers.dev",
@@ -111,6 +111,7 @@ async function gapiFetch(url) {
   return r.json();
 }
 async function boot() {
+  await restoreSettingsFromDriveIfEmpty();
   try {
     const data = await gapiFetch("https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250");
     state.cals = (data.items || []).filter((c) => c.selected !== false || c.primary);
@@ -806,6 +807,85 @@ async function addCalendarEvent(title, dateISO, timeHHMM) {
   return r.json();
 }
 
+/* ---------- settings backup (Google Drive appDataFolder) ---------- */
+// Hidden per-app storage in the user's own Drive — invisible in the Drive UI,
+// only readable by this app while signed in as the same Google account.
+// Lets calendar/list settings and the Todoist token survive a localStorage wipe
+// (e.g. deleting + re-adding the home-screen icon resets iOS's storage container).
+const DRIVE_SETTINGS_FILE = "hub-settings.json";
+let driveSaveChain = Promise.resolve();
+
+function saveSettingsToDrive() {
+  driveSaveChain = driveSaveChain.then(saveSettingsToDriveImpl).catch((e) => {
+    console.warn("Drive settings backup failed", e);
+  });
+  return driveSaveChain;
+}
+
+async function driveFindSettingsFileId() {
+  const r = await fetch(
+    "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=" +
+      encodeURIComponent(`name='${DRIVE_SETTINGS_FILE}'`) + "&fields=files(id,name)",
+    { headers: { Authorization: "Bearer " + state.token } }
+  );
+  if (!r.ok) throw new Error("drive-" + r.status);
+  const data = await r.json();
+  return (data.files && data.files[0]) ? data.files[0].id : null;
+}
+
+async function saveSettingsToDriveImpl() {
+  if (!state.token) return;
+  const payload = {
+    calsOff: [...state.calsOff],
+    projectsOff: JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"),
+    projectOrder: JSON.parse(localStorage.getItem("hub.projectOrder") || "null"),
+    activeListId: state.activeListId,
+    todoistToken: getTodoistToken(),
+    savedAt: Date.now(),
+  };
+  let fileId = await driveFindSettingsFileId();
+  if (!fileId) {
+    const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + state.token, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: DRIVE_SETTINGS_FILE, parents: ["appDataFolder"] }),
+    });
+    if (!createRes.ok) throw new Error("drive-create-" + createRes.status);
+    fileId = (await createRes.json()).id;
+  }
+  await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+    method: "PATCH",
+    headers: { Authorization: "Bearer " + state.token, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+// Only restores if this looks like a fresh/wiped install — never clobbers
+// settings the user has already set on this device.
+async function restoreSettingsFromDriveIfEmpty() {
+  const hasLocalSettings = localStorage.getItem("hub.todoistToken") ||
+    localStorage.getItem("hub.calsOff") || localStorage.getItem("hub.projectOrder");
+  if (hasLocalSettings) return;
+  try {
+    const fileId = await driveFindSettingsFileId();
+    if (!fileId) return;
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      { headers: { Authorization: "Bearer " + state.token } });
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.calsOff) localStorage.setItem("hub.calsOff", JSON.stringify(data.calsOff));
+    if (data.projectsOff) localStorage.setItem("hub.projectsOff", JSON.stringify(data.projectsOff));
+    if (data.projectOrder) localStorage.setItem("hub.projectOrder", JSON.stringify(data.projectOrder));
+    if (data.activeListId) localStorage.setItem("hub.activeList", data.activeListId);
+    if (data.todoistToken) localStorage.setItem("hub.todoistToken", data.todoistToken);
+    state.calsOff = new Set(JSON.parse(localStorage.getItem("hub.calsOff") || "[]"));
+    state.activeListId = localStorage.getItem("hub.activeList") || null;
+    toast("Restored your settings from backup");
+  } catch (e) {
+    console.warn("Drive settings restore failed", e);
+  }
+}
+
 /* ---------- settings ---------- */
 const getProjectsOff = () => new Set(JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"));
 
@@ -845,6 +925,7 @@ function openSettingsPage(page) {
         cb.addEventListener("change", () => {
           cb.checked ? state.calsOff.delete(cal.id) : state.calsOff.add(cal.id);
           localStorage.setItem("hub.calsOff", JSON.stringify([...state.calsOff]));
+          saveSettingsToDrive();
           renderToday(); renderWeek();
         });
         const name = document.createElement("span");
@@ -906,6 +987,7 @@ function openSettingsPage(page) {
             const off = getProjectsOff();
             cb.checked ? off.delete(p.id) : off.add(p.id);
             localStorage.setItem("hub.projectsOff", JSON.stringify([...off]));
+            saveSettingsToDrive();
             buildProjectBar();
           });
 
@@ -920,6 +1002,7 @@ function openSettingsPage(page) {
           moveUp.addEventListener("click", () => {
             [state.todoistProjects[i - 1], state.todoistProjects[i]] = [state.todoistProjects[i], state.todoistProjects[i - 1]];
             localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
+            saveSettingsToDrive();
             buildProjectBar();
             renderProjRows();
           });
@@ -931,6 +1014,7 @@ function openSettingsPage(page) {
           moveDown.addEventListener("click", () => {
             [state.todoistProjects[i], state.todoistProjects[i + 1]] = [state.todoistProjects[i + 1], state.todoistProjects[i]];
             localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
+            saveSettingsToDrive();
             buildProjectBar();
             renderProjRows();
           });
@@ -955,6 +1039,7 @@ function saveTodoistToken() {
   const val = $("todoist-token-input").value.trim();
   if (!val) { toast("Token can't be empty"); return; }
   localStorage.setItem("hub.todoistToken", val);
+  saveSettingsToDrive();
   $("settings").hidden = true;
   toast("Todoist token saved");
   if (state.activeTab === "lists") renderLists();
