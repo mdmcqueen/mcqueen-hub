@@ -308,11 +308,19 @@ async function uncompleteTask(id) {
 
 async function addTodoistTask(content, projectId, due) {
   const body = { content };
-  if (projectId) body.project_id = projectId;
+  // The account's Todoist API (v1, unified) reads/returns camelCase field
+  // names (confirmed via projectId/dueDate/inboxProject in GET responses),
+  // but this was still POSTing snake_case-only keys (project_id, due_date...).
+  // Those got silently ignored, so quick-added tasks landed in Inbox with NO
+  // due date at all — which is why they never matched the Today tab's
+  // "filter=today" query even though the task itself existed (visible only
+  // in Todoist directly / a plain project list, never in the Today view).
+  // Sending both casings is a harmless, version-proof fix.
+  if (projectId) { body.projectId = projectId; body.project_id = projectId; }
   if (due) {
-    if (due.datetime) body.due_datetime = due.datetime;
-    else if (due.date) body.due_date = due.date;
-    else if (due.string) body.due_string = due.string;
+    if (due.datetime) { body.dueDatetime = due.datetime; body.due_datetime = due.datetime; }
+    else if (due.date) { body.dueDate = due.date; body.due_date = due.date; }
+    else if (due.string) { body.dueString = due.string; body.due_string = due.string; }
   }
   await todoistFetch("/tasks", "POST", body);
 }
