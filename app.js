@@ -271,23 +271,13 @@ function isInventoryList(projectId) {
     ctx.stores.some(s => s.id === projectId);
 }
 
-function buildInventoryToggle() {
-  const wrap = document.createElement("label");
-  wrap.className = "inv-toggle";
-  const cb = document.createElement("input");
-  cb.type = "checkbox";
-  cb.checked = isInventoryList(state.activeListId);
-  cb.addEventListener("change", () => {
-    const o = getInventoryOverrides();
-    o[state.activeListId] = cb.checked;
-    localStorage.setItem("hub.inventoryMode", JSON.stringify(o));
-    saveSettingsToDrive();
-    loadTasks();
-  });
-  const txt = document.createElement("span");
-  txt.textContent = "♻︎ Inventory — checked items stay on the list";
-  wrap.append(cb, txt);
-  return wrap;
+// v52: the inventory control lives in Settings > Lists (♻︎ button per row),
+// not at the top of each list.
+function setInventoryOverride(projectId, val) {
+  const o = getInventoryOverrides();
+  o[projectId] = val;
+  localStorage.setItem("hub.inventoryMode", JSON.stringify(o));
+  saveSettingsToDrive();
 }
 
 // Completed tasks for an inventory list (rolling ~90-day window, the API max).
@@ -333,13 +323,8 @@ async function loadTasks() {
       .map(e => e.data.task)
       .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
     el.innerHTML = "";
-    el.appendChild(buildInventoryToggle()); // v51: explicit per-list control
     if ((!tasks || tasks.length === 0) && doneItems.length === 0 && doneExtras.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "empty";
-      empty.textContent = "Nothing here yet.";
-      el.appendChild(empty);
-      return;
+      el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
     }
     tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
     const secOf = (t) => t.sectionId || t.section_id || null;
@@ -738,23 +723,125 @@ async function finishDrag() {
 
 function wireDrag() {
   document.addEventListener("touchmove", (e) => {
-    if (drag.active) {
+    if (drag.active || sdrag.active) {
       e.preventDefault(); // blocks page scroll while a card is lifted
       const t = e.touches[0];
-      dragMove(t.clientX, t.clientY);
+      if (drag.active) dragMove(t.clientX, t.clientY);
+      else sdragMove(t.clientX, t.clientY);
     } else if (drag.timer) {
       const t = e.touches[0];
       if (Math.abs(t.clientX - drag.startX) > 8 || Math.abs(t.clientY - drag.startY) > 8) cancelDragCandidate();
+    } else if (sdrag.timer) {
+      const t = e.touches[0];
+      if (Math.abs(t.clientX - sdrag.startX) > 8 || Math.abs(t.clientY - sdrag.startY) > 8) cancelSettingsDrag();
     }
   }, { passive: false });
   document.addEventListener("mousemove", (e) => {
     if (drag.active) dragMove(e.clientX, e.clientY);
+    else if (sdrag.active) sdragMove(e.clientX, e.clientY);
     else if (drag.timer && (Math.abs(e.clientX - drag.startX) > 8 || Math.abs(e.clientY - drag.startY) > 8)) cancelDragCandidate();
+    else if (sdrag.timer && (Math.abs(e.clientX - sdrag.startX) > 8 || Math.abs(e.clientY - sdrag.startY) > 8)) cancelSettingsDrag();
   });
-  const up = () => { if (drag.active) finishDrag(); else cancelDragCandidate(); };
+  const up = () => {
+    if (drag.active) finishDrag(); else cancelDragCandidate();
+    if (sdrag.active) finishSettingsDrag(); else cancelSettingsDrag();
+  };
   document.addEventListener("touchend", up);
   document.addEventListener("touchcancel", up);
   document.addEventListener("mouseup", up);
+}
+
+/* ---------- Settings drag (v52) ----------
+   Same long-press gesture as task cards, applied to the top-level project
+   rows in Settings > Lists. Children travel with their parent (the order
+   model is unchanged — only top-level order is stored). */
+const sdrag = { timer: null, row: null, pid: null, active: false, ghost: null,
+  startX: 0, startY: 0, lastY: 0, offsetY: 0, overRow: null, after: false };
+
+function attachSettingsDrag(row, pid) {
+  row.addEventListener("touchstart", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.closest("button")) return;
+    const t = e.touches[0];
+    sdragCandidate(row, pid, t.clientX, t.clientY);
+  }, { passive: true });
+  row.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || e.target.tagName === "INPUT" || e.target.closest("button")) return;
+    sdragCandidate(row, pid, e.clientX, e.clientY);
+  });
+}
+
+function sdragCandidate(row, pid, x, y) {
+  cancelSettingsDrag();
+  sdrag.row = row; sdrag.pid = pid; sdrag.startX = x; sdrag.startY = y;
+  sdrag.timer = setTimeout(beginSettingsDrag, 320);
+}
+
+function cancelSettingsDrag() {
+  if (sdrag.timer) clearTimeout(sdrag.timer);
+  sdrag.timer = null;
+  if (!sdrag.active) { sdrag.row = null; sdrag.pid = null; }
+}
+
+function beginSettingsDrag() {
+  sdrag.timer = null;
+  const row = sdrag.row;
+  if (!row || !row.isConnected) return;
+  const rect = row.getBoundingClientRect();
+  sdrag.offsetY = sdrag.startY - rect.top;
+  const ghost = row.cloneNode(true);
+  ghost.className = row.className + " drag-ghost";
+  ghost.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;z-index:60;pointer-events:none;margin:0;background:var(--card);border-radius:10px;`;
+  document.body.appendChild(ghost);
+  sdrag.ghost = ghost;
+  row.classList.add("drag-src");
+  sdrag.active = true;
+  sdrag.lastY = sdrag.startY;
+  if (navigator.vibrate) navigator.vibrate(10);
+}
+
+function sdragMove(x, y) {
+  sdrag.lastY = y;
+  sdrag.ghost.style.top = (y - sdrag.offsetY) + "px";
+  if (sdrag.overRow) sdrag.overRow.classList.remove("drop-before", "drop-after");
+  sdrag.overRow = null;
+  // Auto-scroll the settings modal card
+  const card = document.querySelector("#settings .modal-card");
+  if (card) {
+    const r = card.getBoundingClientRect();
+    if (y < r.top + 60) card.scrollTop -= 10;
+    else if (y > r.bottom - 60) card.scrollTop += 10;
+  }
+  const el = document.elementFromPoint(x, y);
+  if (!el) return;
+  const row2 = el.closest(".proj-sort-row");
+  if (row2 && row2 !== sdrag.row && row2.dataset.top === "1") {
+    const r = row2.getBoundingClientRect();
+    sdrag.after = y > r.top + r.height / 2;
+    row2.classList.add(sdrag.after ? "drop-after" : "drop-before");
+    sdrag.overRow = row2;
+  }
+}
+
+function finishSettingsDrag() {
+  const { row, pid, overRow, after } = sdrag;
+  if (sdrag.ghost) sdrag.ghost.remove();
+  if (row) row.classList.remove("drag-src");
+  if (overRow) overRow.classList.remove("drop-before", "drop-after");
+  sdrag.active = false; sdrag.row = null; sdrag.pid = null; sdrag.ghost = null; sdrag.overRow = null;
+  if (!overRow || !pid) return;
+  const targetPid = overRow.dataset.id;
+  if (targetPid === pid) return;
+  const arr = state.todoistProjects;
+  const from = arr.findIndex(p => p.id === pid);
+  if (from < 0) return;
+  const [moved] = arr.splice(from, 1);
+  let to = arr.findIndex(p => p.id === targetPid);
+  if (to < 0) { arr.splice(from, 0, moved); return; }
+  arr.splice(to + (after ? 1 : 0), 0, moved);
+  localStorage.setItem("hub.projectOrder", JSON.stringify(arr.map(p => p.id)));
+  saveSettingsToDrive();
+  buildProjectBar();
+  if (state._renderProjRows) state._renderProjRows();
 }
 
 // Move a task to another project/section. Tries the v1 move endpoint first,
@@ -1584,8 +1671,13 @@ function openSettingsPage(page) {
       projList.id = "proj-sort-list";
       body.append(projList);
 
-      // v45: rows show the whole tree; children are indented, toggle
-      // independently, and travel with their parent when it's reordered.
+      const hint = document.createElement("div");
+      hint.className = "settings-hint";
+      hint.textContent = "Hold + drag a list to reorder (sub-lists move with their parent). ♻︎ = inventory list: checked items stay visible.";
+      body.append(hint);
+
+      // v52: drag to reorder (same gesture as task cards); ♻︎ toggles
+      // inventory behavior per list.
       const renderProjRows = () => {
         projList.innerHTML = "";
         const projectsOff2 = getProjectsOff();
@@ -1594,6 +1686,7 @@ function openSettingsPage(page) {
           const row = document.createElement("div");
           row.className = "proj-sort-row";
           row.dataset.id = p.id;
+          row.dataset.top = i >= 0 ? "1" : "0";
           if (p._depth) row.style.paddingLeft = (2 + p._depth * 18) + "px";
 
           const cb = document.createElement("input");
@@ -1612,39 +1705,22 @@ function openSettingsPage(page) {
           name.style.flex = "1";
           if (p._depth) name.style.color = "var(--muted)";
 
-          row.append(cb, name);
+          const invBtn = document.createElement("button");
+          invBtn.className = "inv-btn" + (isInventoryList(p.id) ? " on" : "");
+          invBtn.textContent = "♻︎";
+          invBtn.title = "Inventory list — checked items stay visible";
+          invBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            setInventoryOverride(p.id, !isInventoryList(p.id));
+            invBtn.classList.toggle("on", isInventoryList(p.id));
+          });
 
-          if (i >= 0) {
-            const moveUp = document.createElement("button");
-            moveUp.textContent = "↑";
-            moveUp.className = "reorder-btn";
-            moveUp.disabled = i === 0;
-            moveUp.addEventListener("click", () => {
-              [state.todoistProjects[i - 1], state.todoistProjects[i]] = [state.todoistProjects[i], state.todoistProjects[i - 1]];
-              localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
-              saveSettingsToDrive();
-              buildProjectBar();
-              renderProjRows();
-            });
-
-            const moveDown = document.createElement("button");
-            moveDown.textContent = "↓";
-            moveDown.className = "reorder-btn";
-            moveDown.disabled = i === state.todoistProjects.length - 1;
-            moveDown.addEventListener("click", () => {
-              [state.todoistProjects[i], state.todoistProjects[i + 1]] = [state.todoistProjects[i + 1], state.todoistProjects[i]];
-              localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
-              saveSettingsToDrive();
-              buildProjectBar();
-              renderProjRows();
-            });
-
-            row.append(moveUp, moveDown);
-          }
-
+          row.append(cb, name, invBtn);
+          if (i >= 0) attachSettingsDrag(row, p.id);
           projList.append(row);
         });
       };
+      state._renderProjRows = renderProjRows;
       renderProjRows();
     }
   }

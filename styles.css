@@ -148,9 +148,14 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   background: var(--bg); border: 1px solid var(--line); color: var(--muted);
   font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; }
 .task-done .store-badge { opacity: 0.8; }
-.inv-toggle { display: flex; align-items: center; gap: 8px; font-size: 0.78rem;
-  color: var(--muted); padding: 0 2px 6px; cursor: pointer; user-select: none; }
-.inv-toggle input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+.inv-btn { border: 1px solid var(--line); background: var(--card); color: var(--muted);
+  border-radius: 6px; width: 30px; height: 30px; font-size: 1rem; cursor: pointer;
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0; }
+.inv-btn.on { border-color: var(--accent); color: var(--accent); background: var(--brief-bg); }
+.settings-hint { font-size: 0.72rem; color: var(--muted); line-height: 1.4; margin: 2px 0 8px; }
+.proj-sort-row { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.proj-sort-row.drop-before { box-shadow: 0 -3px 0 0 var(--accent); }
+.proj-sort-row.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
 .build-ver { font-size: 0.7rem; color: var(--muted); opacity: 0.5; margin-left: 6px; font-weight: 400; }
 .task-done .task-label, .task-done .title { text-decoration: line-through; }
 .lists-setup { padding: 20px 0; text-align: center; color: var(--muted); }
