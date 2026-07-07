@@ -498,6 +498,20 @@ async function ensureCollaborators(projectId) {
 
 const isP1 = (t) => t && (t.priority === 4 || t.priority === "p1");
 
+/* v57: per-item quantity for grocery lists — stored as a trailing "qty: N"
+   line in the task description (visible-but-harmless in Todoist's own app,
+   machine-readable here). Absent = 1. */
+const qtyOf = (t) => {
+  const m = /(?:^|\n)qty:\s*(\d+)\s*$/im.exec((t && t.description) || "");
+  return m ? Math.max(1, parseInt(m[1], 10)) : 1;
+};
+async function saveQty(task, q) {
+  const base = ((task.description) || "").replace(/(?:^|\n)qty:\s*\d+\s*$/gim, "").trim();
+  const desc = q > 1 ? (base ? base + "\n" : "") + "qty: " + q : base;
+  await todoistFetch("/tasks/" + task.id, "POST", { description: desc });
+  task.description = desc;
+}
+
 // v55: recurring tasks "roll forward" on completion rather than finishing —
 // they get a checked box but no strikethrough. Field shape varies by API
 // surface, so check every known spelling.
@@ -511,32 +525,46 @@ const swipe = { openWrap: null, suppressClickUntil: 0 };
 
 function closeOpenSwipe(except) {
   if (swipe.openWrap && swipe.openWrap !== except) {
-    swipe.openWrap.classList.remove("swipe-open");
-    const r = swipe.openWrap.querySelector(".task-row");
-    if (r) r.style.transform = "";
+    const w2 = swipe.openWrap;
+    w2.classList.remove("swipe-open");
+    const r = w2.querySelector(".task-row");
+    if (r) { r.classList.add("snap"); r.style.transform = ""; }
+    setTimeout(() => { if (!w2.classList.contains("swipe-open")) w2.classList.remove("swiping"); }, 280);
     swipe.openWrap = null;
   }
 }
 
+/* v57 fluidity: the row tracks the finger 1:1 (no transition while moving —
+   the old always-on transition made it lag behind the finger, which was the
+   "clunky" feel). Transitions only apply on release (.snap). A fast leftward
+   flick deletes without reaching the distance threshold, like iOS Mail. The
+   red layer + button only exist while a swipe is in progress, so resting
+   cards have clean edges. */
 function attachSwipe(wrap, row, onDelete) {
   let sx = 0, sy = 0, dx = 0, mode = null, startOpen = false, w = 320;
+  let lastX = 0, lastT = 0, vel = 0;
   const threshold = () => Math.min(200, w * 0.5);
   row.addEventListener("touchstart", (e) => {
     const t = e.touches[0];
-    sx = t.clientX; sy = t.clientY; dx = 0; mode = null;
+    sx = t.clientX; sy = t.clientY; dx = 0; mode = null; vel = 0;
+    lastX = t.clientX; lastT = e.timeStamp;
     w = row.offsetWidth || 320;
     startOpen = wrap.classList.contains("swipe-open");
+    row.classList.remove("snap");
     closeOpenSwipe(wrap);
   }, { passive: true });
   row.addEventListener("touchmove", (e) => {
     const t = e.touches[0];
     const mx = t.clientX - sx, my = t.clientY - sy;
     if (!mode) {
-      if (Math.abs(mx) > 10 && Math.abs(mx) > Math.abs(my) * 1.5) { mode = "h"; cancelDragCandidate(); }
-      else if (Math.abs(my) > 10) mode = "v";
+      if (Math.abs(mx) > 10 && Math.abs(mx) > Math.abs(my) * 1.5) {
+        mode = "h"; cancelDragCandidate(); wrap.classList.add("swiping");
+      } else if (Math.abs(my) > 10) mode = "v";
     }
     if (mode === "h") {
-      // v55: no clamp at the button edge — keep pulling to delete in one motion
+      const dt = e.timeStamp - lastT;
+      if (dt > 0) vel = (t.clientX - lastX) / dt; // px/ms, negative = leftward
+      lastX = t.clientX; lastT = e.timeStamp;
       dx = Math.min(0, Math.max(-w, mx + (startOpen ? -72 : 0)));
       row.style.transform = "translateX(" + dx + "px)";
       wrap.classList.toggle("swipe-armed", dx < -threshold());
@@ -546,17 +574,20 @@ function attachSwipe(wrap, row, onDelete) {
     if (mode !== "h") return;
     swipe.suppressClickUntil = Date.now() + 350;
     wrap.classList.remove("swipe-armed");
-    if (dx < -threshold()) {
-      // Full swipe: finish the motion and delete — no separate tap needed
+    row.classList.add("snap");
+    const flick = vel < -0.5 && dx < -60;
+    if (dx < -threshold() || flick) {
+      // Full swipe or flick: finish the motion and delete — no separate tap
       row.style.transform = "translateX(-110%)";
       wrap.classList.remove("swipe-open");
       if (swipe.openWrap === wrap) swipe.openWrap = null;
-      setTimeout(onDelete, 120);
+      setTimeout(onDelete, 140);
       return;
     }
-    const open = dx < -40;
+    const open = dx < -40 && vel <= 0.05;
     wrap.classList.toggle("swipe-open", open);
     row.style.transform = open ? "translateX(-72px)" : "";
+    if (!open) setTimeout(() => { if (!wrap.classList.contains("swipe-open")) wrap.classList.remove("swiping"); }, 280);
     swipe.openWrap = open ? wrap : (swipe.openWrap === wrap ? null : swipe.openWrap);
   });
 }
@@ -599,6 +630,35 @@ function buildTaskRow(task, isDone, opts) {
   }
   label.appendChild(document.createTextNode(task.content));
   row.append(cb, label);
+  // v57: − qty + stepper on inventory (grocery) lists
+  if (isInventoryList(state.activeListId)) {
+    row.classList.add("has-qty");
+    const step = document.createElement("div");
+    step.className = "qty-stepper";
+    const minus = document.createElement("button");
+    minus.type = "button"; minus.className = "qty-btn"; minus.textContent = "−";
+    const num = document.createElement("span");
+    num.className = "qty-num";
+    const plus = document.createElement("button");
+    plus.type = "button"; plus.className = "qty-btn"; plus.textContent = "+";
+    let q = qtyOf(task);
+    const renderQ = () => { num.textContent = q; step.classList.toggle("qty-one", q <= 1); };
+    renderQ();
+    let saveTimer = null;
+    const change = (d) => {
+      q = Math.max(1, q + d);
+      renderQ();
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try { await saveQty(task, q); }
+        catch (_) { toast("Couldn't save quantity — try again"); }
+      }, 600);
+    };
+    minus.addEventListener("click", (e) => { e.stopPropagation(); change(-1); });
+    plus.addEventListener("click", (e) => { e.stopPropagation(); change(1); });
+    step.append(minus, num, plus);
+    row.appendChild(step);
+  }
   // Store badge (Pantry lens, v51) — which store this item is bought at
   if (opts.storeBadge) {
     const sb = document.createElement("span");
@@ -2147,4 +2207,23 @@ window.addEventListener("load", () => {
   const start = () => (window.google && google.accounts ? initAuth() : setTimeout(start, 150));
   start();
 });
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+/* v57: update banner — new builds activate immediately (skipWaiting+claim),
+   so when the controller changes on an already-controlled page, a fresh
+   version is live and one refresh picks it up. No more force-quitting. */
+function showUpdateBanner() {
+  if ($("upd-banner")) return;
+  const b = document.createElement("div");
+  b.id = "upd-banner";
+  b.className = "upd-banner";
+  b.textContent = "Update ready — tap to refresh";
+  b.addEventListener("click", () => location.reload());
+  document.body.appendChild(b);
+}
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController) { hadController = true; return; } // first install
+    showUpdateBanner();
+  });
+}

@@ -101,7 +101,10 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .add-item.open i { transform: rotate(45deg); }
 
 /* Lists tab */
-.lists-project-bar { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 12px;
+/* v57: bleed to the screen edges — pills scroll under the gutter instead of
+   clipping at it */
+.lists-project-bar { display: flex; gap: 8px; overflow-x: auto;
+  margin: 0 -16px; padding: 2px 16px 12px;
   -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .lists-project-bar::-webkit-scrollbar { display: none; }
 .lists-project-btn { flex-shrink: 0; padding: 6px 14px; border: 0; outline: none;
@@ -113,14 +116,20 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .lists-project-btn.sub.active { box-shadow: none; }
 .task-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 120px; }
 
-/* v53: swipe-to-delete; v55: full-swipe deletes, red layer behind */
-.swipe-wrap { position: relative; background: #dc2626; border-radius: 12px; }
+/* v53: swipe-to-delete; v55: full-swipe deletes; v57: red layer + button
+   exist only mid-swipe (clean resting edges), transitions only on release
+   (1:1 finger tracking while swiping) */
+.swipe-wrap { position: relative; background: transparent; border-radius: 12px; }
+.swipe-wrap.swiping, .swipe-wrap.swipe-open { background: #dc2626; }
 .swipe-del { position: absolute; right: 0; top: 0; bottom: 0; width: 64px; border: 0;
   border-radius: 12px; background: #dc2626; color: #fff; font-size: 0.78rem;
-  font-weight: 700; cursor: pointer; }
+  font-weight: 700; cursor: pointer; opacity: 0; pointer-events: none; }
+.swipe-wrap.swiping .swipe-del, .swipe-wrap.swipe-open .swipe-del {
+  opacity: 1; pointer-events: auto; }
 .swipe-wrap.swipe-armed .swipe-del { font-size: 0.85rem; }
 .swipe-wrap .task-row { position: relative; z-index: 1; background: var(--card);
-  transition: transform 0.16s ease-out; }
+  transition: none; }
+.swipe-wrap .task-row.snap { transition: transform 0.24s cubic-bezier(0.2, 0.9, 0.3, 1); }
 
 /* v53: end-of-list marker + section affordances */
 .list-end { text-align: center; color: var(--muted); opacity: 0.6; font-size: 0.75rem;
@@ -142,7 +151,25 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .lists-project-btn.drop-target { background: var(--accent); color: var(--accent-ink); }
 .task-cb { flex-shrink: 0; cursor: pointer; line-height: 0; border: 0; background: none;
   padding: 0; margin: 0; -webkit-appearance: none; appearance: none; }
-.task-label { font-size: 0.95rem; color: var(--ink); }
+.task-label { font-size: 0.95rem; color: var(--ink); flex: 1; min-width: 0; }
+
+/* v57: grocery quantity stepper */
+.qty-stepper { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.qty-btn { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--card); color: var(--muted); font-size: 0.95rem; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;
+  -webkit-tap-highlight-color: transparent; }
+.qty-num { min-width: 18px; text-align: center; font-size: 0.82rem; font-weight: 600;
+  color: var(--ink); font-variant-numeric: tabular-nums; }
+.qty-stepper.qty-one .qty-num { color: var(--muted); }
+.has-qty .store-badge, .has-qty .assignee-chip { margin-left: 6px; }
+
+/* v57: update-ready banner */
+.upd-banner { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 8px);
+  left: 50%; transform: translateX(-50%); z-index: 70;
+  background: var(--accent); color: var(--accent-ink); font-size: 0.82rem;
+  font-weight: 600; padding: 9px 16px; border-radius: 999px; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
 /* v55: dim the CONTENT of done rows, not the row itself — an opaque card
    keeps the red delete layer hidden underneath. */
 .task-done > * { opacity: 0.45; }
@@ -179,10 +206,10 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 /* v55: recurring tasks roll forward when completed — checked, dimmed, but
    not crossed out. */
 .task-done.recurring .task-label, .task-done.recurring .title { text-decoration: none; }
-/* v56: inventory (grocery) lists — checked means "stocked at home", so the
-   text stays readable: no strikethrough, lighter dim. */
+/* v56/v57: inventory (grocery) lists — checked means "stocked at home":
+   no strikethrough, no dimming. The checkmark alone carries the state. */
 .task-list.inventory .task-done .task-label { text-decoration: none; }
-.task-list.inventory .task-done > * { opacity: 0.6; }
+.task-list.inventory .task-done > * { opacity: 1; }
 .lists-setup { padding: 20px 0; text-align: center; color: var(--muted); }
 .lists-setup .btn-primary { margin-top: 12px; width: auto; padding: 10px 24px; }
 
@@ -294,7 +321,8 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   letter-spacing: 0.05em; color: var(--muted); padding: 12px 0 6px; }
 
 /* ── Capture sheet date picker ──────────────────── */
-.cap-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; padding-top: 8px;
+.cap-meta { display: flex; flex-direction: row; align-items: center; gap: 8px;
+  margin: 0 -12px; padding: 8px 12px 0;
   height: 40px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
   scrollbar-width: none; }
 .cap-meta::-webkit-scrollbar { display: none; }
