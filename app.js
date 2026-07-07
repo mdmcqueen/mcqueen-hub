@@ -368,6 +368,9 @@ async function loadTasks() {
   }
   try {
     const inventory = isInventoryList(state.activeListId);
+    // v56: inventory items stay readable when checked — the checkmark means
+    // "stocked at home," not "done with this forever."
+    el.classList.toggle("inventory", inventory);
     const [tasks, sections, completed] = await Promise.all([
       todoistFetchAll("/tasks?project_id=" + state.activeListId),
       todoistFetchAll("/sections?project_id=" + state.activeListId).catch(() => []),
@@ -427,6 +430,7 @@ async function loadTasks() {
 /* ---------- Pantry lens (v51) ---------- */
 async function renderPantryLens(ctx) {
   const el = $("lists-tasks");
+  el.classList.add("inventory"); // v56: readable checked items
   const switching = state._lastList !== state.activeListId;
   state._lastList = state.activeListId;
   if (switching || !el.hasChildNodes()) {
