@@ -148,6 +148,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   background: var(--bg); border: 1px solid var(--line); color: var(--muted);
   font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; }
 .task-done .store-badge { opacity: 0.8; }
+.inv-toggle { display: flex; align-items: center; gap: 8px; font-size: 0.78rem;
+  color: var(--muted); padding: 0 2px 6px; cursor: pointer; user-select: none; }
+.inv-toggle input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
 .build-ver { font-size: 0.7rem; color: var(--muted); opacity: 0.5; margin-left: 6px; font-weight: 400; }
 .task-done .task-label, .task-done .title { text-decoration: line-through; }
 .lists-setup { padding: 20px 0; text-align: center; color: var(--muted); }

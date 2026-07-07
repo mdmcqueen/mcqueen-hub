@@ -166,6 +166,22 @@ async function todoistFetch(path, method = "GET", body = null) {
   return r.json();
 }
 
+// v51: the v1 API paginates (~100–200 per page) and Whole Foods alone has
+// 170+ items — single-page fetches silently dropped everything past page 1.
+// Follows nextCursor/next_cursor until exhausted.
+async function todoistFetchAll(path) {
+  const base = path + (path.includes("?") ? "&" : "?") + "limit=200";
+  let out = [], cursor = null, guard = 0;
+  do {
+    const d = await todoistFetch(base + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""));
+    const arr = Array.isArray(d) ? d :
+      (d && (d.results || d.items || d.tasks || d.sections || d.projects)) || [];
+    out = out.concat(arr);
+    cursor = (d && !Array.isArray(d)) ? (d.nextCursor || d.next_cursor || null) : null;
+  } while (cursor && ++guard < 20);
+  return out;
+}
+
 async function renderLists() {
   const bar = $("lists-project-bar");
   const tasksEl = $("lists-tasks");
@@ -183,8 +199,7 @@ async function renderLists() {
   tasksEl.innerHTML = "";
 
   try {
-    const projectsData = await todoistFetch("/projects");
-    const projects = Array.isArray(projectsData) ? projectsData : (projectsData.projects || projectsData.results || projectsData.items || []);
+    const projects = await todoistFetchAll("/projects");
     ingestProjects(projects || []);
 
     if (!state.activeListId && state.todoistProjects.length > 0) {
@@ -238,7 +253,17 @@ function groceryContext() {
   const stores = kids.filter(p => !pantry || p.id !== pantry.id);
   return { parent, pantry, stores };
 }
+/* v51: inventory behavior is now explicit and controllable per list.
+   Default: ON for the grocery family, OFF elsewhere. The ♻︎ toggle above any
+   list overrides the default (stored in hub.inventoryMode, backed up to
+   Drive). Inventory ON = checked-off items stay visible and uncheckable —
+   for recurring-item lists like groceries. OFF = normal Todoist behavior:
+   completed tasks disappear from the list. */
+const getInventoryOverrides = () => JSON.parse(localStorage.getItem("hub.inventoryMode") || "{}");
+
 function isInventoryList(projectId) {
+  const o = getInventoryOverrides();
+  if (Object.prototype.hasOwnProperty.call(o, projectId)) return !!o[projectId];
   const ctx = groceryContext();
   if (!ctx) return false;
   return projectId === ctx.parent.id ||
@@ -246,14 +271,32 @@ function isInventoryList(projectId) {
     ctx.stores.some(s => s.id === projectId);
 }
 
+function buildInventoryToggle() {
+  const wrap = document.createElement("label");
+  wrap.className = "inv-toggle";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = isInventoryList(state.activeListId);
+  cb.addEventListener("change", () => {
+    const o = getInventoryOverrides();
+    o[state.activeListId] = cb.checked;
+    localStorage.setItem("hub.inventoryMode", JSON.stringify(o));
+    saveSettingsToDrive();
+    loadTasks();
+  });
+  const txt = document.createElement("span");
+  txt.textContent = "♻︎ Inventory — checked items stay on the list";
+  wrap.append(cb, txt);
+  return wrap;
+}
+
 // Completed tasks for an inventory list (rolling ~90-day window, the API max).
 async function fetchCompletedItems(projectId) {
   try {
     const since = new Date(Date.now() - 89 * 86400000).toISOString();
     const until = new Date().toISOString();
-    const d = await todoistFetch("/tasks/completed/by_completion_date?project_id=" + projectId +
-      "&since=" + encodeURIComponent(since) + "&until=" + encodeURIComponent(until) + "&limit=200");
-    const items = Array.isArray(d) ? d : (d.items || d.results || d.tasks || []);
+    const items = await todoistFetchAll("/tasks/completed/by_completion_date?project_id=" + projectId +
+      "&since=" + encodeURIComponent(since) + "&until=" + encodeURIComponent(until));
     return (items || []).map(it => ({
       id: it.taskId || it.task_id || it.id,
       content: it.content,
@@ -275,15 +318,12 @@ async function loadTasks() {
   el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   try {
     const inventory = isInventoryList(state.activeListId);
-    const [tasksData, sectionsData, completed] = await Promise.all([
-      todoistFetch("/tasks?project_id=" + state.activeListId),
-      todoistFetch("/sections?project_id=" + state.activeListId).catch(() => null),
+    const [tasks, sections, completed] = await Promise.all([
+      todoistFetchAll("/tasks?project_id=" + state.activeListId),
+      todoistFetchAll("/sections?project_id=" + state.activeListId).catch(() => []),
       inventory ? fetchCompletedItems(state.activeListId) : Promise.resolve([]),
       ensureCollaborators(state.activeListId),
     ]);
-    const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || tasksData.items || tasksData.results || []);
-    const sections = !sectionsData ? [] :
-      (Array.isArray(sectionsData) ? sectionsData : (sectionsData.sections || sectionsData.results || sectionsData.items || []));
     pruneCompletedRecently();
     const openIds = new Set(tasks.map(t => t.id));
     const doneItems = (completed || []).filter(c => c.id && !openIds.has(c.id));
@@ -293,8 +333,13 @@ async function loadTasks() {
       .map(e => e.data.task)
       .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
     el.innerHTML = "";
+    el.appendChild(buildInventoryToggle()); // v51: explicit per-list control
     if ((!tasks || tasks.length === 0) && doneItems.length === 0 && doneExtras.length === 0) {
-      el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "Nothing here yet.";
+      el.appendChild(empty);
+      return;
     }
     tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
     const secOf = (t) => t.sectionId || t.section_id || null;
@@ -329,11 +374,10 @@ async function renderPantryLens(ctx) {
   try {
     const perStore = await Promise.all(ctx.stores.map(async (s) => {
       try {
-        const [d, done] = await Promise.all([
-          todoistFetch("/tasks?project_id=" + s.id),
+        const [open, done] = await Promise.all([
+          todoistFetchAll("/tasks?project_id=" + s.id),
           fetchCompletedItems(s.id),
         ]);
-        const open = Array.isArray(d) ? d : (d.tasks || d.items || d.results || []);
         const openIds = new Set(open.map(t => t.id));
         return { store: s, open, done: done.filter(c => c.id && !openIds.has(c.id)) };
       } catch (_) { return { store: s, open: [], done: [] }; }
@@ -843,9 +887,7 @@ async function fetchTasksByFilter(filter) {
   try {
     // Ensure projects (and the Inbox id) are loaded so we can filter by visibility
     if (!state.todoistProjects || state.todoistProjects.length === 0 || state.todoistInboxId == null) {
-      const pd = await todoistFetch("/projects");
-      const allProj = Array.isArray(pd) ? pd : (pd.projects || pd.results || pd.items || []);
-      ingestProjects(allProj);
+      ingestProjects(await todoistFetchAll("/projects"));
     }
     // v45: visibility now covers nested projects too (allProjectsFlat), so a
     // task due today inside Margot/Finance/312 Rheem's children shows up.
@@ -854,8 +896,7 @@ async function fetchTasksByFilter(filter) {
     // Quick-added tasks (Today/Week FAB) have no project and land in Inbox —
     // Inbox has no visibility toggle in Settings, so always treat it as shown.
     if (state.todoistInboxId) visibleIds.add(state.todoistInboxId);
-    const data = await todoistFetch("/tasks?filter=" + encodeURIComponent(filter));
-    const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || []);
+    const tasks = await todoistFetchAll("/tasks?filter=" + encodeURIComponent(filter));
     return tasks.filter(t => visibleIds.has(t.projectId || t.project_id));
   } catch (e) { return []; }
 }
@@ -1408,6 +1449,7 @@ async function saveSettingsToDriveImpl() {
     calsOff: [...state.calsOff],
     projectsOff: JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"),
     projectOrder: JSON.parse(localStorage.getItem("hub.projectOrder") || "null"),
+    inventoryMode: getInventoryOverrides(),
     activeListId: state.activeListId,
     todoistToken: getTodoistToken(),
     savedAt: Date.now(),
@@ -1445,6 +1487,7 @@ async function restoreSettingsFromDriveIfEmpty() {
     if (data.calsOff) localStorage.setItem("hub.calsOff", JSON.stringify(data.calsOff));
     if (data.projectsOff) localStorage.setItem("hub.projectsOff", JSON.stringify(data.projectsOff));
     if (data.projectOrder) localStorage.setItem("hub.projectOrder", JSON.stringify(data.projectOrder));
+    if (data.inventoryMode) localStorage.setItem("hub.inventoryMode", JSON.stringify(data.inventoryMode));
     if (data.activeListId) localStorage.setItem("hub.activeList", data.activeListId);
     if (data.todoistToken) localStorage.setItem("hub.todoistToken", data.todoistToken);
     state.calsOff = new Set(JSON.parse(localStorage.getItem("hub.calsOff") || "[]"));
