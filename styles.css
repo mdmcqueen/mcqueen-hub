@@ -116,6 +116,14 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   padding: 0; margin: 0; -webkit-appearance: none; appearance: none; }
 .task-label { font-size: 0.95rem; color: var(--ink); }
 .task-done { opacity: 0.45; }
+.list-section-head { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); padding: 14px 2px 2px; }
+.task-list .list-section-head:first-child { padding-top: 4px; }
+.assignee-chip { flex-shrink: 0; margin-left: auto; width: 24px; height: 24px;
+  border-radius: 50%; background: var(--brief-bg); border: 1px solid var(--brief-line);
+  color: var(--accent); font-size: 0.72rem; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; }
+.task-flame { margin-right: 5px; font-size: 0.85em; }
 .build-ver { font-size: 0.7rem; color: var(--muted); opacity: 0.5; margin-left: 6px; font-weight: 400; }
 .task-done .task-label, .task-done .title { text-decoration: line-through; }
 .lists-setup { padding: 20px 0; text-align: center; color: var(--muted); }

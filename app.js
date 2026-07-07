@@ -220,12 +220,22 @@ function buildProjectBar() {
   });
 }
 
+// v46: fetch the project's sections alongside its tasks and render tasks
+// grouped under section headers (Groceries' aisle walk-order, etc.). Sections
+// with no open tasks are hidden. Collaborator names load in parallel so
+// assigned tasks can show who owns them.
 async function loadTasks() {
   const el = $("lists-tasks");
   el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   try {
-    const tasksData = await todoistFetch("/tasks?project_id=" + state.activeListId);
+    const [tasksData, sectionsData] = await Promise.all([
+      todoistFetch("/tasks?project_id=" + state.activeListId),
+      todoistFetch("/sections?project_id=" + state.activeListId).catch(() => null),
+      ensureCollaborators(state.activeListId),
+    ]);
     const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || tasksData.items || tasksData.results || []);
+    const sections = !sectionsData ? [] :
+      (Array.isArray(sectionsData) ? sectionsData : (sectionsData.sections || sectionsData.results || sectionsData.items || []));
     pruneCompletedRecently();
     const doneExtras = [...state.completedRecently.values()]
       .filter(e => e.kind === "list" && e.data.projectId === state.activeListId)
@@ -234,13 +244,43 @@ async function loadTasks() {
     if ((!tasks || tasks.length === 0) && doneExtras.length === 0) {
       el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
     }
-    tasks.sort((a, b) => (a.child_order ?? a.order ?? 0) - (b.child_order ?? b.order ?? 0));
-    tasks.forEach(t => el.appendChild(buildTaskRow(t)));
+    tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
+    const secOf = (t) => t.sectionId || t.section_id || null;
+    // Tasks with no section come first (matches Todoist's own layout)
+    tasks.filter(t => !secOf(t)).forEach(t => el.appendChild(buildTaskRow(t)));
+    const secOrd = (s) => s.sectionOrder ?? s.section_order ?? s.order ?? 0;
+    sections.slice().sort((a, b) => secOrd(a) - secOrd(b)).forEach(s => {
+      const secTasks = tasks.filter(t => secOf(t) === s.id);
+      if (secTasks.length === 0) return;
+      const head = document.createElement("div");
+      head.className = "list-section-head";
+      head.textContent = s.name;
+      el.appendChild(head);
+      secTasks.forEach(t => el.appendChild(buildTaskRow(t)));
+    });
     doneExtras.forEach(t => el.appendChild(buildTaskRow(t, true)));
   } catch (e) {
     el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
   }
 }
+
+// Collaborator names per shared project (cached). Used for assignee chips.
+async function ensureCollaborators(projectId) {
+  state.collabCache = state.collabCache || {};
+  if (state.collabCache[projectId]) return state.collabCache[projectId];
+  try {
+    const data = await todoistFetch("/projects/" + projectId + "/collaborators");
+    const list = Array.isArray(data) ? data : (data.results || data.items || data.collaborators || []);
+    const map = {};
+    (list || []).forEach(u => { map[u.id] = u.name || u.email || ""; });
+    state.collabCache[projectId] = map;
+  } catch (_) {
+    state.collabCache[projectId] = {}; // personal project or endpoint unavailable — no chips
+  }
+  return state.collabCache[projectId];
+}
+
+const isP1 = (t) => t && (t.priority === 4 || t.priority === "p1");
 
 function buildTaskRow(task, isDone) {
   const row = document.createElement("div");
@@ -257,8 +297,25 @@ function buildTaskRow(task, isDone) {
     else completeTask(task.id, { kind: "list", data: { task, projectId: state.activeListId } });
   });
   const label = document.createElement("span");
-  label.className = "task-label"; label.textContent = task.content;
+  label.className = "task-label";
+  if (isP1(task)) {
+    const flame = document.createElement("span");
+    flame.className = "task-flame";
+    flame.textContent = "🔥";
+    label.appendChild(flame);
+  }
+  label.appendChild(document.createTextNode(task.content));
   row.append(cb, label);
+  // Assignee chip (shared projects) — first initial of the responsible user
+  const uid = task.responsibleUid || task.responsible_uid || null;
+  const collab = (state.collabCache || {})[state.activeListId] || {};
+  if (uid && collab[uid]) {
+    const chip = document.createElement("span");
+    chip.className = "assignee-chip";
+    chip.textContent = collab[uid].trim().charAt(0).toUpperCase();
+    chip.title = collab[uid];
+    row.appendChild(chip);
+  }
   return row;
 }
 
@@ -656,7 +713,14 @@ function timelineRow(item, isPast) {
     if (cb.dataset.done === "1") uncompleteTask(item.id);
     else completeTask(item.id, { kind: item.overdueDate ? "overdue" : "today", data: { item } });
   });
-  const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
+  const title = document.createElement("div"); title.className = "title";
+  if (isP1(item.task)) {
+    const flame = document.createElement("span");
+    flame.className = "task-flame";
+    flame.textContent = "🔥";
+    title.appendChild(flame);
+  }
+  title.appendChild(document.createTextNode(item.title));
   const cbRow = document.createElement("div");
   cbRow.style.cssText = "display:flex;align-items:center;gap:10px;";
   cbRow.append(cb, title);
