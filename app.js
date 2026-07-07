@@ -209,6 +209,7 @@ function buildProjectBar() {
   visible.forEach(p => {
     const btn = document.createElement("button");
     btn.className = "lists-project-btn" + (p.id === state.activeListId ? " active" : "") + (p._depth ? " sub" : "");
+    btn.dataset.pid = p.id; // drag-drop target (v49)
     btn.textContent = p.name;
     btn.onclick = () => {
       state.activeListId = p.id;
@@ -254,6 +255,7 @@ async function loadTasks() {
       if (secTasks.length === 0) return;
       const head = document.createElement("div");
       head.className = "list-section-head";
+      head.dataset.sectionId = s.id; // drag-drop target (v49)
       head.textContent = s.name;
       el.appendChild(head);
       secTasks.forEach(t => el.appendChild(buildTaskRow(t)));
@@ -285,6 +287,9 @@ const isP1 = (t) => t && (t.priority === 4 || t.priority === "p1");
 function buildTaskRow(task, isDone) {
   const row = document.createElement("div");
   row.className = "task-row" + (isDone ? " task-done" : ""); row.id = "task-" + task.id;
+  row.dataset.taskId = task.id;
+  row.dataset.sectionId = task.sectionId || task.section_id || "";
+  if (!isDone) attachDrag(row, task);
   const cb = document.createElement("button");
   cb.className = "task-cb";
   cb.type = "button";
@@ -360,6 +365,187 @@ async function uncompleteTask(id) {
       if (cb) { cb.innerHTML = CHECK_DONE_SVG; cb.dataset.done = "1"; }
     }
   }
+}
+
+/* ---------- drag to reorder / move (Lists tab, v49) ----------
+   Long-press (320ms) a task row to lift it, then:
+   - drop between rows        → reorder (persisted via sync item_reorder)
+   - drop on a section header → move to top of that section
+   - drop on a project pill   → move the task to that project
+   Movement >8px before the timer fires is treated as a scroll, not a drag. */
+const drag = {
+  timer: null, row: null, task: null, active: false, ghost: null,
+  startX: 0, startY: 0, lastX: 0, lastY: 0, offsetY: 0,
+  overRow: null, overHead: null, overPill: null, after: false, raf: null,
+};
+
+function attachDrag(row, task) {
+  row.addEventListener("touchstart", (e) => {
+    if (e.target.closest(".task-cb")) return;
+    const t = e.touches[0];
+    startDragCandidate(row, task, t.clientX, t.clientY);
+  }, { passive: true });
+  row.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || e.target.closest(".task-cb")) return;
+    startDragCandidate(row, task, e.clientX, e.clientY);
+  });
+}
+
+function startDragCandidate(row, task, x, y) {
+  cancelDragCandidate();
+  drag.row = row; drag.task = task; drag.startX = x; drag.startY = y;
+  drag.timer = setTimeout(beginDrag, 320);
+}
+
+function cancelDragCandidate() {
+  if (drag.timer) clearTimeout(drag.timer);
+  drag.timer = null;
+  if (!drag.active) { drag.row = null; drag.task = null; }
+}
+
+function beginDrag() {
+  drag.timer = null;
+  const row = drag.row;
+  if (!row || !row.isConnected) return;
+  const rect = row.getBoundingClientRect();
+  drag.offsetY = drag.startY - rect.top;
+  const ghost = row.cloneNode(true);
+  ghost.className = row.className + " drag-ghost";
+  ghost.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;z-index:60;pointer-events:none;margin:0;`;
+  document.body.appendChild(ghost);
+  drag.ghost = ghost;
+  row.classList.add("drag-src");
+  drag.active = true;
+  drag.lastX = drag.startX; drag.lastY = drag.startY;
+  if (navigator.vibrate) navigator.vibrate(10);
+  drag.raf = requestAnimationFrame(dragAutoScroll);
+}
+
+function dragMove(x, y) {
+  drag.lastX = x; drag.lastY = y;
+  drag.ghost.style.top = (y - drag.offsetY) + "px";
+  clearDropMarks();
+  const el = document.elementFromPoint(x, y);
+  if (!el) return;
+  const pill = el.closest(".lists-project-btn");
+  if (pill && pill.dataset.pid && pill.dataset.pid !== String(state.activeListId)) {
+    pill.classList.add("drop-target");
+    drag.overPill = pill;
+    return;
+  }
+  const row2 = el.closest(".task-row");
+  if (row2 && row2 !== drag.row && !row2.classList.contains("task-done") && row2.dataset.taskId) {
+    const r = row2.getBoundingClientRect();
+    drag.after = y > r.top + r.height / 2;
+    row2.classList.add(drag.after ? "drop-after" : "drop-before");
+    drag.overRow = row2;
+    return;
+  }
+  const head = el.closest(".list-section-head");
+  if (head) { head.classList.add("drop-after"); drag.overHead = head; }
+}
+
+function clearDropMarks() {
+  if (drag.overRow) drag.overRow.classList.remove("drop-before", "drop-after");
+  if (drag.overHead) drag.overHead.classList.remove("drop-after");
+  if (drag.overPill) drag.overPill.classList.remove("drop-target");
+  drag.overRow = drag.overHead = drag.overPill = null;
+}
+
+function dragAutoScroll() {
+  if (!drag.active) return;
+  const y = drag.lastY, vh = window.innerHeight;
+  if (y < 110) { window.scrollBy(0, -10); dragMove(drag.lastX, drag.lastY); }
+  else if (y > vh - 150) { window.scrollBy(0, 10); dragMove(drag.lastX, drag.lastY); }
+  drag.raf = requestAnimationFrame(dragAutoScroll);
+}
+
+async function finishDrag() {
+  cancelAnimationFrame(drag.raf);
+  const row = drag.row, task = drag.task;
+  const pill = drag.overPill, tRow = drag.overRow, head = drag.overHead, after = drag.after;
+  if (drag.ghost) drag.ghost.remove();
+  if (row) row.classList.remove("drag-src");
+  clearDropMarks();
+  drag.active = false; drag.row = null; drag.task = null; drag.ghost = null;
+  if (!row || !task) return;
+  try {
+    if (pill) {
+      const pid = pill.dataset.pid, name = pill.textContent;
+      row.remove();
+      await moveTask(task.id, { project_id: pid });
+      toast("Moved to " + name);
+      return;
+    }
+    if (tRow || head) {
+      const target = tRow || head;
+      const newSec = target.dataset.sectionId || "";
+      const oldSec = row.dataset.sectionId || "";
+      if (tRow) tRow.parentNode.insertBefore(row, after ? tRow.nextSibling : tRow);
+      else head.parentNode.insertBefore(row, head.nextSibling);
+      row.dataset.sectionId = newSec;
+      if (newSec !== oldSec) {
+        await moveTask(task.id, newSec ? { section_id: newSec } : { project_id: state.activeListId });
+      }
+      await persistReorder(newSec);
+    }
+  } catch (e) {
+    toast("Couldn't move — try again");
+    loadTasks();
+  }
+}
+
+function wireDrag() {
+  document.addEventListener("touchmove", (e) => {
+    if (drag.active) {
+      e.preventDefault(); // blocks page scroll while a card is lifted
+      const t = e.touches[0];
+      dragMove(t.clientX, t.clientY);
+    } else if (drag.timer) {
+      const t = e.touches[0];
+      if (Math.abs(t.clientX - drag.startX) > 8 || Math.abs(t.clientY - drag.startY) > 8) cancelDragCandidate();
+    }
+  }, { passive: false });
+  document.addEventListener("mousemove", (e) => {
+    if (drag.active) dragMove(e.clientX, e.clientY);
+    else if (drag.timer && (Math.abs(e.clientX - drag.startX) > 8 || Math.abs(e.clientY - drag.startY) > 8)) cancelDragCandidate();
+  });
+  const up = () => { if (drag.active) finishDrag(); else cancelDragCandidate(); };
+  document.addEventListener("touchend", up);
+  document.addEventListener("touchcancel", up);
+  document.addEventListener("mouseup", up);
+}
+
+// Move a task to another project/section. Tries the v1 move endpoint first,
+// falls back to a sync item_move command.
+async function moveTask(id, dest) {
+  const body = { ...dest };
+  if (dest.project_id) body.projectId = dest.project_id; // both casings, v44 lesson
+  if (dest.section_id) body.sectionId = dest.section_id;
+  try {
+    await todoistFetch("/tasks/" + id + "/move", "POST", body);
+  } catch (_) {
+    await todoistSync([{ type: "item_move", args: { id, ...dest } }]);
+  }
+}
+
+async function todoistSync(commands) {
+  const cmds = commands.map(c => ({
+    uuid: (self.crypto && crypto.randomUUID) ? crypto.randomUUID() : "u" + Math.random().toString(36).slice(2),
+    ...c,
+  }));
+  await todoistFetch("/sync", "POST", { commands: cmds });
+}
+
+// Persist the DOM order of a section's rows as child_order. Best-effort:
+// if the sync call fails the optimistic order survives until next load.
+async function persistReorder(sectionId) {
+  const items = [...$("lists-tasks").querySelectorAll(".task-row")]
+    .filter(r => (r.dataset.sectionId || "") === (sectionId || "") && r.dataset.taskId && !r.classList.contains("task-done"))
+    .map((r, i) => ({ id: r.dataset.taskId, child_order: i + 1 }));
+  if (items.length < 2) return;
+  try { await todoistSync([{ type: "item_reorder", args: { items } }]); }
+  catch (e) { console.warn("reorder not persisted", e); }
 }
 
 async function addTodoistTask(content, projectId, due) {
@@ -1395,6 +1581,7 @@ function wireUI() {
   });
 
   wirePullToRefresh();
+  wireDrag();
 }
 
 window.addEventListener("load", () => {

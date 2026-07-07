@@ -114,7 +114,16 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-list { display: flex; flex-direction: column; gap: 8px; }
 .task-row { display: flex; align-items: center; gap: 12px; background: var(--card);
   border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px;
-  transition: opacity 0.3s; }
+  transition: opacity 0.3s;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* Drag to reorder / move (v49) */
+.drag-ghost { box-shadow: 0 8px 28px rgba(0,0,0,0.28); transform: scale(1.02); opacity: 0.96; }
+.drag-src { opacity: 0.3; }
+.task-row.drop-before { box-shadow: 0 -3px 0 0 var(--accent); }
+.task-row.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
+.list-section-head.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
+.lists-project-btn.drop-target { background: var(--accent); color: var(--accent-ink); }
 .task-cb { flex-shrink: 0; cursor: pointer; line-height: 0; border: 0; background: none;
   padding: 0; margin: 0; -webkit-appearance: none; appearance: none; }
 .task-label { font-size: 0.95rem; color: var(--ink); }
