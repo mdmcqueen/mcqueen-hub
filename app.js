@@ -385,6 +385,14 @@ async function createTodoistProject(name) {
   await todoistFetch("/projects", "POST", { name });
 }
 
+// v47: Todoist's server-side quick-add parser — understands natural language
+// dates ("tue 3pm", "every saturday 9am"), priorities ("p1"), and #project
+// routing, exactly like typing in Todoist's own add bar. Used for Task
+// captures when no date chip is set; falls back to the plain endpoint.
+async function quickAddTask(text) {
+  await todoistFetch("/tasks/quick", "POST", { text, meta: false });
+}
+
 /* Project hierarchy — v45.
    Subprojects (Margot, Sadie, Finance, 312 Rheem's children…) used to be
    invisible: both the Lists tab and the Today view's visibility check only
@@ -817,7 +825,10 @@ function handleCapture(label) {
       openCapSheet("event", "Event title…", null, todayISO());
       break;
     case "Task":
-      openCapSheet("task", "New task…", null, state.activeTab === "today" ? todayISO() : null);
+      // Week tab (or after clearing the date chip) supports natural language:
+      // "dentist tue 3pm", "water plants every saturday"
+      openCapSheet("task", state.activeTab === "today" ? "New task…" : "New task… (try: dentist tue 3pm)",
+        null, state.activeTab === "today" ? todayISO() : null);
       break;
     case "Reminder":
       openCapSheet("reminder", "Remind me to…", null, state.activeTab === "today" ? todayISO() : null);
@@ -921,7 +932,14 @@ async function submitCapSheet() {
       if (chipDate && chipTime) due = { datetime: localToUTCISO(chipDate, chipTime) };
       else if (chipDate) due = { date: chipDate };
       else if (type === "reminder") due = { string: "today" };
-      await addTodoistTask(value, projectId, due);
+      if (type === "task" && !chipDate && !chipTime) {
+        // No chips → let Todoist parse the text itself ("dentist tue 3pm",
+        // "water plants every saturday", "milk #Groceries").
+        try { await quickAddTask(value); }
+        catch (_) { await addTodoistTask(value, projectId, due); }
+      } else {
+        await addTodoistTask(value, projectId, due);
+      }
       toast("Added!");
       closeFab();
       if (type === "item" && state.activeTab === "lists") loadTasks();
