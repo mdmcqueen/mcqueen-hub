@@ -195,8 +195,10 @@ async function renderLists() {
     return;
   }
 
-  bar.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
-  tasksEl.innerHTML = "";
+  // v53: keep existing content on refresh — only show loading when empty
+  if (!bar.hasChildNodes()) {
+    bar.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+  }
 
   try {
     const projects = await todoistFetchAll("/projects");
@@ -301,11 +303,69 @@ async function fetchCompletedItems(projectId) {
 // grouped under section headers (Groceries' aisle walk-order, etc.).
 // v51: inventory lists also fetch completed items and show them dimmed
 // inside their section, uncheckable back onto the list.
+// v53: section headers show an edit hint and stay visible even when empty
+// (a freshly added section must be visible to be usable).
+function setSectionHeadContent(head, name) {
+  head.textContent = name;
+  const hint = document.createElement("span");
+  hint.className = "sec-edit-hint";
+  hint.textContent = "✎";
+  head.appendChild(hint);
+}
+
+// "+ Add section" control at the bottom of real (non-lens) lists (v53).
+function buildAddSectionControl() {
+  const btn = document.createElement("div");
+  btn.className = "add-section-btn";
+  btn.textContent = "＋ Add section";
+  btn.addEventListener("click", () => {
+    if (btn.querySelector("input")) return;
+    btn.textContent = "";
+    const input = document.createElement("input");
+    input.className = "sec-rename-input";
+    input.placeholder = "Section name…";
+    btn.appendChild(input);
+    input.focus();
+    let done = false;
+    const commit = async () => {
+      if (done) return; done = true;
+      const val = input.value.trim();
+      if (!val) { btn.textContent = "＋ Add section"; return; }
+      btn.textContent = "Adding…";
+      try {
+        await todoistFetch("/sections", "POST",
+          { name: val, projectId: state.activeListId, project_id: state.activeListId });
+        toast("Section added");
+        loadTasks();
+      } catch (_) {
+        toast("Couldn't add section — try again");
+        btn.textContent = "＋ Add section";
+      }
+    };
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
+  });
+  return btn;
+}
+
+function listEndMarker() {
+  const end = document.createElement("div");
+  end.className = "list-end";
+  end.textContent = "· end of list ·";
+  return end;
+}
+
 async function loadTasks() {
   const ctx = groceryContext();
   if (ctx && ctx.pantry && state.activeListId === ctx.pantry.id) return renderPantryLens(ctx);
   const el = $("lists-tasks");
-  el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+  // v53: only show a loading state on first load / list switch — refreshes
+  // render off-DOM and swap in atomically, so no clear-and-flash.
+  const switching = state._lastList !== state.activeListId;
+  state._lastList = state.activeListId;
+  if (switching || !el.hasChildNodes()) {
+    el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+  }
   try {
     const inventory = isInventoryList(state.activeListId);
     const [tasks, sections, completed] = await Promise.all([
@@ -322,40 +382,56 @@ async function loadTasks() {
       .filter(e => e.kind === "list" && e.data.projectId === state.activeListId)
       .map(e => e.data.task)
       .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
-    el.innerHTML = "";
-    if ((!tasks || tasks.length === 0) && doneItems.length === 0 && doneExtras.length === 0) {
-      el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
+    const frag = document.createDocumentFragment();
+    const hasContent = (tasks && tasks.length > 0) || doneItems.length > 0 || doneExtras.length > 0;
+    if (!hasContent && (!sections || sections.length === 0)) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "Nothing here yet.";
+      frag.appendChild(empty);
+      frag.appendChild(buildAddSectionControl());
+      el.replaceChildren(frag);
+      return;
     }
     tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
     const secOf = (t) => t.sectionId || t.section_id || null;
     const renderGroup = (secId) => {
-      tasks.filter(t => secOf(t) === secId).forEach(t => el.appendChild(buildTaskRow(t)));
-      doneItems.filter(c => (c.sectionId || null) === secId).forEach(c => el.appendChild(buildTaskRow(c, true)));
+      tasks.filter(t => secOf(t) === secId).forEach(t => frag.appendChild(buildTaskRow(t)));
+      doneItems.filter(c => (c.sectionId || null) === secId).forEach(c => frag.appendChild(buildTaskRow(c, true)));
     };
     // Tasks with no section come first (matches Todoist's own layout)
     renderGroup(null);
     const secOrd = (s) => s.sectionOrder ?? s.section_order ?? s.order ?? 0;
     sections.slice().sort((a, b) => secOrd(a) - secOrd(b)).forEach(s => {
-      const hasAny = tasks.some(t => secOf(t) === s.id) || doneItems.some(c => c.sectionId === s.id);
-      if (!hasAny) return;
       const head = document.createElement("div");
       head.className = "list-section-head";
       head.dataset.sectionId = s.id; // drag-drop target (v49)
-      head.textContent = s.name;
+      setSectionHeadContent(head, s.name);
       head.addEventListener("click", () => beginSectionRename(head, s)); // v50
-      el.appendChild(head);
+      frag.appendChild(head);
       renderGroup(s.id);
     });
-    doneExtras.forEach(t => el.appendChild(buildTaskRow(t, true)));
+    doneExtras.forEach(t => frag.appendChild(buildTaskRow(t, true)));
+    frag.appendChild(buildAddSectionControl());
+    frag.appendChild(listEndMarker());
+    el.replaceChildren(frag);
   } catch (e) {
-    el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+    if (switching || !el.querySelector(".task-row")) {
+      el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+    } else {
+      toast("Couldn't refresh — showing last loaded");
+    }
   }
 }
 
 /* ---------- Pantry lens (v51) ---------- */
 async function renderPantryLens(ctx) {
   const el = $("lists-tasks");
-  el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+  const switching = state._lastList !== state.activeListId;
+  state._lastList = state.activeListId;
+  if (switching || !el.hasChildNodes()) {
+    el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+  }
   try {
     const perStore = await Promise.all(ctx.stores.map(async (s) => {
       try {
@@ -367,9 +443,11 @@ async function renderPantryLens(ctx) {
         return { store: s, open, done: done.filter(c => c.id && !openIds.has(c.id)) };
       } catch (_) { return { store: s, open: [], done: [] }; }
     }));
-    el.innerHTML = "";
+    const frag = document.createDocumentFragment();
     const total = perStore.reduce((n, r) => n + r.open.length + r.done.length, 0);
-    if (total === 0) { el.innerHTML = `<div class="empty">No items in the store lists yet.</div>`; return; }
+    if (total === 0) {
+      el.innerHTML = `<div class="empty">No items in the store lists yet.</div>`; return;
+    }
     const badge = (name) => name.split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
     const locOf = (t) => homeLocOf(t) || "Unsorted";
     HOME_LOCS.concat(["Unsorted"]).forEach(loc => {
@@ -384,11 +462,17 @@ async function renderPantryLens(ctx) {
       const head = document.createElement("div");
       head.className = "list-section-head";
       head.textContent = loc;
-      el.appendChild(head);
-      rows.forEach(r => el.appendChild(r));
+      frag.appendChild(head);
+      rows.forEach(r => frag.appendChild(r));
     });
+    frag.appendChild(listEndMarker());
+    el.replaceChildren(frag);
   } catch (e) {
-    el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+    if (switching || !el.querySelector(".task-row")) {
+      el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+    } else {
+      toast("Couldn't refresh — showing last loaded");
+    }
   }
 }
 
@@ -410,6 +494,49 @@ async function ensureCollaborators(projectId) {
 
 const isP1 = (t) => t && (t.priority === 4 || t.priority === "p1");
 
+/* v53: swipe a row left to reveal Delete. Horizontal intent cancels the
+   long-press drag; vertical scrolling is untouched. One row open at a time. */
+const swipe = { openWrap: null, suppressClickUntil: 0 };
+
+function closeOpenSwipe(except) {
+  if (swipe.openWrap && swipe.openWrap !== except) {
+    swipe.openWrap.classList.remove("swipe-open");
+    const r = swipe.openWrap.querySelector(".task-row");
+    if (r) r.style.transform = "";
+    swipe.openWrap = null;
+  }
+}
+
+function attachSwipe(wrap, row) {
+  let sx = 0, sy = 0, dx = 0, mode = null, startOpen = false;
+  row.addEventListener("touchstart", (e) => {
+    const t = e.touches[0];
+    sx = t.clientX; sy = t.clientY; dx = 0; mode = null;
+    startOpen = wrap.classList.contains("swipe-open");
+    closeOpenSwipe(wrap);
+  }, { passive: true });
+  row.addEventListener("touchmove", (e) => {
+    const t = e.touches[0];
+    const mx = t.clientX - sx, my = t.clientY - sy;
+    if (!mode) {
+      if (Math.abs(mx) > 10 && Math.abs(mx) > Math.abs(my) * 1.5) { mode = "h"; cancelDragCandidate(); }
+      else if (Math.abs(my) > 10) mode = "v";
+    }
+    if (mode === "h") {
+      dx = Math.min(0, Math.max(-88, mx + (startOpen ? -72 : 0)));
+      row.style.transform = "translateX(" + dx + "px)";
+    }
+  }, { passive: true });
+  row.addEventListener("touchend", () => {
+    if (mode !== "h") return;
+    swipe.suppressClickUntil = Date.now() + 350;
+    const open = dx < -40;
+    wrap.classList.toggle("swipe-open", open);
+    row.style.transform = open ? "translateX(-72px)" : "";
+    swipe.openWrap = open ? wrap : (swipe.openWrap === wrap ? null : swipe.openWrap);
+  });
+}
+
 function buildTaskRow(task, isDone, opts) {
   opts = opts || {};
   const row = document.createElement("div");
@@ -422,6 +549,7 @@ function buildTaskRow(task, isDone, opts) {
     row.addEventListener("click", (e) => {
       if (e.target.closest(".task-cb")) return;
       if (Date.now() < (drag.suppressClickUntil || 0)) return;
+      if (Date.now() < (swipe.suppressClickUntil || 0)) return;
       openTaskEdit(task, row);
     });
   }
@@ -463,8 +591,34 @@ function buildTaskRow(task, isDone, opts) {
     chip.title = collab[uid];
     row.appendChild(chip);
   }
-  return row;
+  // v53: swipe-to-delete wrapper
+  const wrap = document.createElement("div");
+  wrap.className = "swipe-wrap";
+  const del = document.createElement("button");
+  del.className = "swipe-del";
+  del.type = "button";
+  del.textContent = "Delete";
+  del.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    closeOpenSwipe(null);
+    wrap.remove();
+    try {
+      await todoistFetch("/tasks/" + task.id, "DELETE");
+      toast("Deleted");
+    } catch (_) {
+      toast("Couldn't delete — refreshing");
+      loadTasks();
+    }
+  });
+  wrap.append(del, row);
+  attachSwipe(wrap, row);
+  return wrap;
 }
+
+// A dragged/queried .task-row lives inside its swipe wrapper — DOM moves and
+// removals must operate on the wrapper.
+const wrapOf = (el) => (el && el.parentNode && el.parentNode.classList &&
+  el.parentNode.classList.contains("swipe-wrap")) ? el.parentNode : el;
 
 /* ---------- item edit sheet (v50) ---------- */
 const HOME_LOCS = ["Cupboard", "Fridge", "Freezer"];
@@ -488,6 +642,7 @@ function openTaskEdit(task) {
     <div class="settings-token-actions" style="margin-top:16px"><button id="te-save" class="settings-btn-primary">Save</button></div>`;
   modal.appendChild(card);
   document.body.appendChild(modal);
+  lockBodyScroll();
   $("te-title").value = task.content;
   let chosen = homeLocOf(task);
   const locsEl = $("te-locs");
@@ -502,7 +657,7 @@ function openTaskEdit(task) {
     });
   };
   renderLocs();
-  const close = () => modal.remove();
+  const close = () => { modal.remove(); unlockBodyScroll(); };
   $("te-close").onclick = close;
   modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
   $("te-save").onclick = async () => {
@@ -535,14 +690,14 @@ function beginSectionRename(head, s) {
   const commit = async () => {
     if (committed) return; committed = true;
     const val = input.value.trim();
-    head.textContent = val || old;
+    setSectionHeadContent(head, val || old);
     if (!val || val === old) return;
     try {
       await todoistFetch("/sections/" + s.id, "POST", { name: val });
       s.name = val;
       toast("Section renamed");
     } catch (_) {
-      head.textContent = old;
+      setSectionHeadContent(head, old);
       toast("Couldn't rename — try again");
     }
   };
@@ -698,7 +853,7 @@ async function finishDrag() {
   try {
     if (pill) {
       const pid = pill.dataset.pid, name = pill.textContent;
-      row.remove();
+      wrapOf(row).remove();
       await moveTask(task.id, { project_id: pid });
       toast("Moved to " + name);
       return;
@@ -707,8 +862,9 @@ async function finishDrag() {
       const target = tRow || head;
       const newSec = target.dataset.sectionId || "";
       const oldSec = row.dataset.sectionId || "";
-      if (tRow) tRow.parentNode.insertBefore(row, after ? tRow.nextSibling : tRow);
-      else head.parentNode.insertBefore(row, head.nextSibling);
+      // v53: rows live inside swipe wrappers — move the wrapper
+      if (tRow) { const tw = wrapOf(tRow); tw.parentNode.insertBefore(wrapOf(row), after ? tw.nextSibling : tw); }
+      else head.parentNode.insertBefore(wrapOf(row), head.nextSibling);
       row.dataset.sectionId = newSec;
       if (newSec !== oldSec) {
         await moveTask(task.id, newSec ? { section_id: newSec } : { project_id: state.activeListId });
@@ -1588,7 +1744,34 @@ async function restoreSettingsFromDriveIfEmpty() {
 /* ---------- settings ---------- */
 const getProjectsOff = () => new Set(JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"));
 
+// v53: lock the page behind modals — scrolling the Settings list was also
+// scrolling the active list underneath (iOS scroll bleed-through).
+let _bodyLocked = false, _bodyLockY = 0;
+function lockBodyScroll() {
+  if (_bodyLocked) return;
+  _bodyLocked = true;
+  _bodyLockY = window.scrollY;
+  document.body.style.position = "fixed";
+  document.body.style.top = (-_bodyLockY) + "px";
+  document.body.style.left = "0";
+  document.body.style.right = "0";
+}
+function unlockBodyScroll() {
+  if (!_bodyLocked) return;
+  _bodyLocked = false;
+  document.body.style.position = "";
+  document.body.style.top = "";
+  document.body.style.left = "";
+  document.body.style.right = "";
+  window.scrollTo(0, _bodyLockY);
+}
+function closeSettings() {
+  $("settings").hidden = true;
+  unlockBodyScroll();
+}
+
 function openSettings() {
+  if ($("settings").hidden) lockBodyScroll();
   $("settings-back").hidden = true;
   $("settings-title").textContent = "Settings";
   const body = $("settings-body");
@@ -1738,7 +1921,7 @@ function saveTodoistToken() {
   if (!val) { toast("Token can't be empty"); return; }
   localStorage.setItem("hub.todoistToken", val);
   saveSettingsToDrive();
-  $("settings").hidden = true;
+  closeSettings();
   toast("Todoist token saved");
   if (state.activeTab === "lists") renderLists();
 }
@@ -1798,8 +1981,8 @@ function wireUI() {
   $("btn-signin").addEventListener("click", () => requestToken(true));
   $("btn-settings").addEventListener("click", openSettings);
   $("settings-back").addEventListener("click", openSettings);
-  $("settings-close").addEventListener("click", () => { $("settings").hidden = true; });
-  $("settings").addEventListener("click", (e) => { if (e.target === $("settings")) $("settings").hidden = true; });
+  $("settings-close").addEventListener("click", closeSettings);
+  $("settings").addEventListener("click", (e) => { if (e.target === $("settings")) closeSettings(); });
 
   $("week-prev").addEventListener("click", () => { state.weekOffset--; renderWeek(); });
   $("week-next").addEventListener("click", () => { state.weekOffset++; renderWeek(); });
