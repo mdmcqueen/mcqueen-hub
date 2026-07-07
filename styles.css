@@ -267,6 +267,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   letter-spacing: 0.05em; color: var(--muted); padding: 8px 0 2px; }
 .timeline-section-label.overdue-label { color: #e53e3e; }
 .event .time.overdue { color: #e53e3e; font-weight: 600; }
+.overdue-toggle { border-top: none; margin-top: 0; padding: 6px 0 10px; }
+.tmr-toggle span.ov-title { flex: 1; font-size: 0.82rem; font-weight: 700;
+  color: #e53e3e; text-transform: uppercase; letter-spacing: 0.05em; }
 
 .tmr-toggle { display: flex; align-items: center; gap: 8px; padding: 14px 0;
   border-top: 1px solid var(--line); cursor: pointer; margin-top: 4px; }

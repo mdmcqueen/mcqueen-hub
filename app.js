@@ -855,6 +855,11 @@ async function finishDrag() {
       const pid = pill.dataset.pid, name = pill.textContent;
       wrapOf(row).remove();
       await moveTask(task.id, { project_id: pid });
+      // v54: inventory lists are timeless — arriving items lose their date
+      // (quick-adds default to "today"; without this they'd rot as Overdue).
+      if (isInventoryList(pid) && (task.due || task.dueDate || task.due_date || task.dueDatetime || task.due_datetime)) {
+        try { await todoistFetch("/tasks/" + task.id, "POST", { dueString: "no date", due_string: "no date" }); } catch (_) {}
+      }
       toast("Moved to " + name);
       return;
     }
@@ -1139,6 +1144,12 @@ async function fetchTasksByFilter(filter) {
     // Quick-added tasks (Today/Week FAB) have no project and land in Inbox —
     // Inbox has no visibility toggle in Settings, so always treat it as shown.
     if (state.todoistInboxId) visibleIds.add(state.todoistInboxId);
+    // v54: inventory lists (grocery family + any ♻︎-flagged list) are
+    // timeless — their items never belong in Today or Overdue, even if a
+    // date sneaks onto one.
+    for (const id of [...visibleIds]) {
+      if (isInventoryList(id)) visibleIds.delete(id);
+    }
     const tasks = await todoistFetchAll("/tasks?filter=" + encodeURIComponent(filter));
     return tasks.filter(t => visibleIds.has(t.projectId || t.project_id));
   } catch (e) { return []; }
@@ -1231,13 +1242,27 @@ function buildTimeline(items, tmrItems, now, briefText, overdueItems) {
   const el = $("today-timeline");
   el.innerHTML = "";
 
-  // Overdue section first (v45)
+  // Overdue drawer (v54): collapsed by default, count in the header,
+  // remembers your last open/closed choice.
   if (overdueItems && overdueItems.length > 0) {
-    const oLabel = document.createElement("div");
-    oLabel.className = "timeline-section-label overdue-label";
-    oLabel.textContent = "Overdue";
-    el.appendChild(oLabel);
-    overdueItems.forEach(item => el.appendChild(timelineRow(item, false)));
+    const openPref = localStorage.getItem("hub.overdueOpen") === "1";
+    const oToggle = document.createElement("div");
+    oToggle.className = "tmr-toggle overdue-toggle";
+    oToggle.innerHTML = `<span class="ov-title">Overdue</span>` +
+      `<span class="tmr-count">${overdueItems.length} item${overdueItems.length !== 1 ? "s" : ""}</span>` +
+      `<span class="tmr-chevron">${openPref ? "⌄" : "›"}</span>`;
+    const oBody = document.createElement("div");
+    oBody.className = "tmr-body";
+    oBody.hidden = !openPref;
+    overdueItems.forEach(item => oBody.appendChild(timelineRow(item, false)));
+    oToggle.addEventListener("click", () => {
+      const open = !oBody.hidden;
+      oBody.hidden = open;
+      localStorage.setItem("hub.overdueOpen", open ? "0" : "1");
+      oToggle.querySelector(".tmr-chevron").textContent = open ? "›" : "⌄";
+    });
+    el.appendChild(oToggle);
+    el.appendChild(oBody);
   }
 
   const timed = items.filter(i => i.time);
