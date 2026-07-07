@@ -113,12 +113,13 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .lists-project-btn.sub.active { box-shadow: none; }
 .task-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 120px; }
 
-/* v53: swipe-to-delete */
-.swipe-wrap { position: relative; }
+/* v53: swipe-to-delete; v55: full-swipe deletes, red layer behind */
+.swipe-wrap { position: relative; background: #dc2626; border-radius: 12px; }
 .swipe-del { position: absolute; right: 0; top: 0; bottom: 0; width: 64px; border: 0;
   border-radius: 12px; background: #dc2626; color: #fff; font-size: 0.78rem;
   font-weight: 700; cursor: pointer; }
-.swipe-wrap .task-row { position: relative; z-index: 1;
+.swipe-wrap.swipe-armed .swipe-del { font-size: 0.85rem; }
+.swipe-wrap .task-row { position: relative; z-index: 1; background: var(--card);
   transition: transform 0.16s ease-out; }
 
 /* v53: end-of-list marker + section affordances */
@@ -142,7 +143,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-cb { flex-shrink: 0; cursor: pointer; line-height: 0; border: 0; background: none;
   padding: 0; margin: 0; -webkit-appearance: none; appearance: none; }
 .task-label { font-size: 0.95rem; color: var(--ink); }
-.task-done { opacity: 0.45; }
+/* v55: dim the CONTENT of done rows, not the row itself — an opaque card
+   keeps the red delete layer hidden underneath. */
+.task-done > * { opacity: 0.45; }
 .list-section-head { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--muted); padding: 14px 2px 2px; }
 .task-list .list-section-head:first-child { padding-top: 4px; }
@@ -173,6 +176,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .proj-sort-row.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
 .build-ver { font-size: 0.7rem; color: var(--muted); opacity: 0.5; margin-left: 6px; font-weight: 400; }
 .task-done .task-label, .task-done .title { text-decoration: line-through; }
+/* v55: recurring tasks roll forward when completed — checked, dimmed, but
+   not crossed out. */
+.task-done.recurring .task-label, .task-done.recurring .title { text-decoration: none; }
 .lists-setup { padding: 20px 0; text-align: center; color: var(--muted); }
 .lists-setup .btn-primary { margin-top: 12px; width: auto; padding: 10px 24px; }
 

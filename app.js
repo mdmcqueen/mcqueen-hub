@@ -494,6 +494,13 @@ async function ensureCollaborators(projectId) {
 
 const isP1 = (t) => t && (t.priority === 4 || t.priority === "p1");
 
+// v55: recurring tasks "roll forward" on completion rather than finishing —
+// they get a checked box but no strikethrough. Field shape varies by API
+// surface, so check every known spelling.
+const isRecurringTask = (t) => !!(t && (t.recurring === true ||
+  t.isRecurring || t.is_recurring ||
+  (t.due && (t.due.isRecurring || t.due.is_recurring))));
+
 /* v53: swipe a row left to reveal Delete. Horizontal intent cancels the
    long-press drag; vertical scrolling is untouched. One row open at a time. */
 const swipe = { openWrap: null, suppressClickUntil: 0 };
@@ -507,11 +514,13 @@ function closeOpenSwipe(except) {
   }
 }
 
-function attachSwipe(wrap, row) {
-  let sx = 0, sy = 0, dx = 0, mode = null, startOpen = false;
+function attachSwipe(wrap, row, onDelete) {
+  let sx = 0, sy = 0, dx = 0, mode = null, startOpen = false, w = 320;
+  const threshold = () => Math.min(200, w * 0.5);
   row.addEventListener("touchstart", (e) => {
     const t = e.touches[0];
     sx = t.clientX; sy = t.clientY; dx = 0; mode = null;
+    w = row.offsetWidth || 320;
     startOpen = wrap.classList.contains("swipe-open");
     closeOpenSwipe(wrap);
   }, { passive: true });
@@ -523,13 +532,24 @@ function attachSwipe(wrap, row) {
       else if (Math.abs(my) > 10) mode = "v";
     }
     if (mode === "h") {
-      dx = Math.min(0, Math.max(-88, mx + (startOpen ? -72 : 0)));
+      // v55: no clamp at the button edge — keep pulling to delete in one motion
+      dx = Math.min(0, Math.max(-w, mx + (startOpen ? -72 : 0)));
       row.style.transform = "translateX(" + dx + "px)";
+      wrap.classList.toggle("swipe-armed", dx < -threshold());
     }
   }, { passive: true });
   row.addEventListener("touchend", () => {
     if (mode !== "h") return;
     swipe.suppressClickUntil = Date.now() + 350;
+    wrap.classList.remove("swipe-armed");
+    if (dx < -threshold()) {
+      // Full swipe: finish the motion and delete — no separate tap needed
+      row.style.transform = "translateX(-110%)";
+      wrap.classList.remove("swipe-open");
+      if (swipe.openWrap === wrap) swipe.openWrap = null;
+      setTimeout(onDelete, 120);
+      return;
+    }
     const open = dx < -40;
     wrap.classList.toggle("swipe-open", open);
     row.style.transform = open ? "translateX(-72px)" : "";
@@ -540,7 +560,8 @@ function attachSwipe(wrap, row) {
 function buildTaskRow(task, isDone, opts) {
   opts = opts || {};
   const row = document.createElement("div");
-  row.className = "task-row" + (isDone ? " task-done" : ""); row.id = "task-" + task.id;
+  row.className = "task-row" + (isDone ? " task-done" : "") + (isRecurringTask(task) ? " recurring" : "");
+  row.id = "task-" + task.id;
   row.dataset.taskId = task.id;
   row.dataset.sectionId = task.sectionId || task.section_id || "";
   if (!isDone && !opts.noDrag) attachDrag(row, task);
@@ -591,17 +612,14 @@ function buildTaskRow(task, isDone, opts) {
     chip.title = collab[uid];
     row.appendChild(chip);
   }
-  // v53: swipe-to-delete wrapper
+  // v53: swipe-to-delete wrapper; v55: full swipe deletes in one motion
   const wrap = document.createElement("div");
   wrap.className = "swipe-wrap";
-  const del = document.createElement("button");
-  del.className = "swipe-del";
-  del.type = "button";
-  del.textContent = "Delete";
-  del.addEventListener("click", async (e) => {
-    e.stopPropagation();
+  const doDelete = async () => {
     closeOpenSwipe(null);
-    wrap.remove();
+    wrap.style.transition = "opacity 0.15s";
+    wrap.style.opacity = "0";
+    setTimeout(() => wrap.remove(), 150);
     try {
       await todoistFetch("/tasks/" + task.id, "DELETE");
       toast("Deleted");
@@ -609,9 +627,14 @@ function buildTaskRow(task, isDone, opts) {
       toast("Couldn't delete — refreshing");
       loadTasks();
     }
-  });
+  };
+  const del = document.createElement("button");
+  del.className = "swipe-del";
+  del.type = "button";
+  del.textContent = "Delete";
+  del.addEventListener("click", (e) => { e.stopPropagation(); doDelete(); });
   wrap.append(del, row);
-  attachSwipe(wrap, row);
+  attachSwipe(wrap, row, doDelete);
   return wrap;
 }
 
@@ -1395,7 +1418,8 @@ function timelineRow(item, isPast) {
   const isDone = !!item.isDone;
   // Task row — matches Lists tab style but with time column prepended
   const row = document.createElement("div");
-  row.className = "event" + (isDone ? " task-done" : ""); // reuse event card style
+  row.className = "event" + (isDone ? " task-done" : "") +
+    (isRecurringTask(item.task) ? " recurring" : ""); // reuse event card style
   row.id = "task-" + item.id;
   if (isPast && !isDone) row.style.opacity = "0.38";
 
