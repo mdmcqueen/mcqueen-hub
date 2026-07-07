@@ -185,8 +185,7 @@ async function renderLists() {
   try {
     const projectsData = await todoistFetch("/projects");
     const projects = Array.isArray(projectsData) ? projectsData : (projectsData.projects || projectsData.results || projectsData.items || []);
-    // Top-level non-inbox projects
-    state.todoistProjects = (projects || []).filter(p => !p.inboxProject && !p.parentId);
+    ingestProjects(projects || []);
 
     if (!state.activeListId && state.todoistProjects.length > 0) {
       const groceries = state.todoistProjects.find(p => /grocer/i.test(p.name));
@@ -206,10 +205,10 @@ function buildProjectBar() {
   const bar = $("lists-project-bar");
   bar.innerHTML = "";
   const projectsOff = getProjectsOff();
-  const visible = state.todoistProjects.filter(p => !projectsOff.has(p.id));
+  const visible = allProjectsFlat().filter(p => !projectsOff.has(p.id));
   visible.forEach(p => {
     const btn = document.createElement("button");
-    btn.className = "lists-project-btn" + (p.id === state.activeListId ? " active" : "");
+    btn.className = "lists-project-btn" + (p.id === state.activeListId ? " active" : "") + (p._depth ? " sub" : "");
     btn.textContent = p.name;
     btn.onclick = () => {
       state.activeListId = p.id;
@@ -329,6 +328,46 @@ async function createTodoistProject(name) {
   await todoistFetch("/projects", "POST", { name });
 }
 
+/* Project hierarchy — v45.
+   Subprojects (Margot, Sadie, Finance, 312 Rheem's children…) used to be
+   invisible: both the Lists tab and the Today view's visibility check only
+   looked at top-level (!parentId) projects, so any task inside a nested
+   project silently vanished from Today. ingestProjects() keeps the top-level
+   ordering model (Settings reorder applies to parents; children travel with
+   them) and records the parent→children map; allProjectsFlat() walks it
+   depth-first so every consumer sees the full tree. */
+function ingestProjects(allProj) {
+  const inbox = allProj.find(p => p.inboxProject || p.inbox_project);
+  if (inbox) state.todoistInboxId = inbox.id;
+  const nonInbox = allProj.filter(p => !(p.inboxProject || p.inbox_project));
+  const ord = (p) => p.childOrder ?? p.child_order ?? 0;
+  const byParent = {};
+  nonInbox.forEach(p => {
+    const par = p.parentId || p.parent_id || null;
+    if (par) (byParent[par] = byParent[par] || []).push(p);
+  });
+  Object.values(byParent).forEach(arr => arr.sort((a, b) => ord(a) - ord(b)));
+  let tops = nonInbox.filter(p => !(p.parentId || p.parent_id));
+  const savedOrder = JSON.parse(localStorage.getItem("hub.projectOrder") || "null");
+  if (savedOrder) {
+    const idMap = Object.fromEntries(tops.map(p => [p.id, p]));
+    tops = savedOrder.map(id => idMap[id]).filter(Boolean)
+      .concat(tops.filter(p => !savedOrder.includes(p.id)));
+  }
+  state.todoistProjects = tops;
+  state.todoistByParent = byParent;
+}
+function allProjectsFlat() {
+  const out = [];
+  const walk = (p, depth) => {
+    p._depth = depth;
+    out.push(p);
+    ((state.todoistByParent || {})[p.id] || []).forEach(c => walk(c, depth + 1));
+  };
+  (state.todoistProjects || []).forEach(p => walk(p, 0));
+  return out;
+}
+
 /* ---------- calendar rendering ---------- */
 const calOn = (cal) => !state.calsOff.has(cal.id);
 const evDate = (ev) => ev.start.date || ev.start.dateTime.slice(0, 10);
@@ -351,34 +390,23 @@ function eventRow({ ev, cal }) {
 function visible(events) {
   return events.filter((x) => calOn(x.cal) && (x.ev.summary || "").trim() !== CONFIG.BRIEF_TITLE);
 }
-async function fetchTodayTasks() {
+async function fetchTasksByFilter(filter) {
   if (!getTodoistToken()) return [];
   try {
     // Ensure projects (and the Inbox id) are loaded so we can filter by visibility
     if (!state.todoistProjects || state.todoistProjects.length === 0 || state.todoistInboxId == null) {
       const pd = await todoistFetch("/projects");
       const allProj = Array.isArray(pd) ? pd : (pd.projects || pd.results || pd.items || []);
-      const inbox = allProj.find(p => p.inboxProject);
-      state.todoistInboxId = inbox ? inbox.id : state.todoistInboxId;
-      if (!state.todoistProjects || state.todoistProjects.length === 0) {
-        const savedOrder = JSON.parse(localStorage.getItem("hub.projectOrder") || "null");
-        state.todoistProjects = allProj.filter(p => !p.inboxProject && !p.parentId);
-        if (savedOrder) {
-          const idMap = Object.fromEntries(state.todoistProjects.map(p => [p.id, p]));
-          state.todoistProjects = savedOrder.map(id => idMap[id]).filter(Boolean)
-            .concat(state.todoistProjects.filter(p => !savedOrder.includes(p.id)));
-        }
-      }
+      ingestProjects(allProj);
     }
-    const visibleIds = new Set(
-      state.todoistProjects
-        .filter(p => !getProjectsOff().has(p.id))
-        .map(p => p.id)
-    );
+    // v45: visibility now covers nested projects too (allProjectsFlat), so a
+    // task due today inside Margot/Finance/312 Rheem's children shows up.
+    const off = getProjectsOff();
+    const visibleIds = new Set(allProjectsFlat().filter(p => !off.has(p.id)).map(p => p.id));
     // Quick-added tasks (Today/Week FAB) have no project and land in Inbox —
     // Inbox has no visibility toggle in Settings, so always treat it as shown.
     if (state.todoistInboxId) visibleIds.add(state.todoistInboxId);
-    const data = await todoistFetch("/tasks?filter=today");
+    const data = await todoistFetch("/tasks?filter=" + encodeURIComponent(filter));
     const tasks = Array.isArray(data) ? data : (data.items || data.tasks || data.results || []);
     return tasks.filter(t => visibleIds.has(t.projectId || t.project_id));
   } catch (e) { return []; }
@@ -396,7 +424,11 @@ async function renderToday() {
   const now = new Date();
   $("hdr-date").textContent = fmt(now, { weekday: "long", month: "long", day: "numeric" });
 
-  const [calEvents, tasks] = await Promise.all([fetchRange(today, 2), fetchTodayTasks()]);
+  const [calEvents, tasks, overdueTasks] = await Promise.all([
+    fetchRange(today, 2),
+    fetchTasksByFilter("today"),
+    fetchTasksByFilter("overdue"),
+  ]);
 
   // Find brief (passed to buildTimeline for Tomorrow section)
   const briefEv = calEvents.find(({ ev, cal }) =>
@@ -443,15 +475,38 @@ async function renderToday() {
     return a.time - b.time;
   });
 
+  // Overdue tasks (v45) — dated before today, shown at the very top so they
+  // can't rot invisibly. Completing one works exactly like a today task.
+  pruneCompletedRecently();
+  const overdueItems = overdueTasks.map(t => {
+    const d = t.dueDate || t.due_date || (t.due && (t.due.date || t.due.datetime)) || "";
+    return { type: "task", title: t.content, time: null, allDay: true, id: t.id, task: t,
+      overdueDate: String(d).slice(0, 10) };
+  });
+  state.completedRecently.forEach((entry, id) => {
+    if (entry.kind === "overdue" && !overdueItems.find(i => i.id === id)) {
+      overdueItems.push({ ...entry.data.item, isDone: true });
+    }
+  });
+
   // Tomorrow events (for collapsed section)
   const tmrItems = visible(calEvents).filter(({ ev }) => evDate(ev) === isoPlus(today, 1));
 
-  buildTimeline(items, tmrItems, now, briefText);
+  buildTimeline(items, tmrItems, now, briefText, overdueItems);
 }
 
-function buildTimeline(items, tmrItems, now, briefText) {
+function buildTimeline(items, tmrItems, now, briefText, overdueItems) {
   const el = $("today-timeline");
   el.innerHTML = "";
+
+  // Overdue section first (v45)
+  if (overdueItems && overdueItems.length > 0) {
+    const oLabel = document.createElement("div");
+    oLabel.className = "timeline-section-label overdue-label";
+    oLabel.textContent = "Overdue";
+    el.appendChild(oLabel);
+    overdueItems.forEach(item => el.appendChild(timelineRow(item, false)));
+  }
 
   const timed = items.filter(i => i.time);
   const untimed = items.filter(i => !i.time);
@@ -499,7 +554,7 @@ function buildTimeline(items, tmrItems, now, briefText) {
   }
 
   // Empty state
-  if (items.length === 0) {
+  if (items.length === 0 && (!overdueItems || overdueItems.length === 0)) {
     const empty = document.createElement("div");
     empty.className = "empty";
     empty.style.paddingTop = "40px";
@@ -585,6 +640,11 @@ function timelineRow(item, isPast) {
   const timeEl = document.createElement("div");
   timeEl.className = "time" + (item.time ? "" : " allday");
   timeEl.textContent = item.time ? fmtTime(item.time) : "Anytime";
+  if (item.overdueDate) {
+    timeEl.className = "time overdue";
+    timeEl.textContent = new Date(item.overdueDate + "T12:00:00")
+      .toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
 
   const w = document.createElement("div"); w.className = "what";
   // Checkbox
@@ -594,7 +654,7 @@ function timelineRow(item, isPast) {
   cb.addEventListener("click", (e) => {
     e.stopPropagation();
     if (cb.dataset.done === "1") uncompleteTask(item.id);
-    else completeTask(item.id, { kind: "today", data: { item } });
+    else completeTask(item.id, { kind: item.overdueDate ? "overdue" : "today", data: { item } });
   });
   const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
   const cbRow = document.createElement("div");
@@ -1006,13 +1066,17 @@ function openSettingsPage(page) {
       projList.id = "proj-sort-list";
       body.append(projList);
 
+      // v45: rows show the whole tree; children are indented, toggle
+      // independently, and travel with their parent when it's reordered.
       const renderProjRows = () => {
         projList.innerHTML = "";
         const projectsOff2 = getProjectsOff();
-        state.todoistProjects.forEach((p, i) => {
+        allProjectsFlat().forEach((p) => {
+          const i = state.todoistProjects.indexOf(p); // -1 for subprojects
           const row = document.createElement("div");
           row.className = "proj-sort-row";
           row.dataset.id = p.id;
+          if (p._depth) row.style.paddingLeft = (2 + p._depth * 18) + "px";
 
           const cb = document.createElement("input");
           cb.type = "checkbox";
@@ -1028,32 +1092,38 @@ function openSettingsPage(page) {
           const name = document.createElement("span");
           name.textContent = p.name;
           name.style.flex = "1";
+          if (p._depth) name.style.color = "var(--muted)";
 
-          const moveUp = document.createElement("button");
-          moveUp.textContent = "↑";
-          moveUp.className = "reorder-btn";
-          moveUp.disabled = i === 0;
-          moveUp.addEventListener("click", () => {
-            [state.todoistProjects[i - 1], state.todoistProjects[i]] = [state.todoistProjects[i], state.todoistProjects[i - 1]];
-            localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
-            saveSettingsToDrive();
-            buildProjectBar();
-            renderProjRows();
-          });
+          row.append(cb, name);
 
-          const moveDown = document.createElement("button");
-          moveDown.textContent = "↓";
-          moveDown.className = "reorder-btn";
-          moveDown.disabled = i === state.todoistProjects.length - 1;
-          moveDown.addEventListener("click", () => {
-            [state.todoistProjects[i], state.todoistProjects[i + 1]] = [state.todoistProjects[i + 1], state.todoistProjects[i]];
-            localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
-            saveSettingsToDrive();
-            buildProjectBar();
-            renderProjRows();
-          });
+          if (i >= 0) {
+            const moveUp = document.createElement("button");
+            moveUp.textContent = "↑";
+            moveUp.className = "reorder-btn";
+            moveUp.disabled = i === 0;
+            moveUp.addEventListener("click", () => {
+              [state.todoistProjects[i - 1], state.todoistProjects[i]] = [state.todoistProjects[i], state.todoistProjects[i - 1]];
+              localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
+              saveSettingsToDrive();
+              buildProjectBar();
+              renderProjRows();
+            });
 
-          row.append(cb, name, moveUp, moveDown);
+            const moveDown = document.createElement("button");
+            moveDown.textContent = "↓";
+            moveDown.className = "reorder-btn";
+            moveDown.disabled = i === state.todoistProjects.length - 1;
+            moveDown.addEventListener("click", () => {
+              [state.todoistProjects[i], state.todoistProjects[i + 1]] = [state.todoistProjects[i + 1], state.todoistProjects[i]];
+              localStorage.setItem("hub.projectOrder", JSON.stringify(state.todoistProjects.map(p => p.id)));
+              saveSettingsToDrive();
+              buildProjectBar();
+              renderProjRows();
+            });
+
+            row.append(moveUp, moveDown);
+          }
+
           projList.append(row);
         });
       };
