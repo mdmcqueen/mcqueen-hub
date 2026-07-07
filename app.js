@@ -221,46 +221,143 @@ function buildProjectBar() {
   });
 }
 
+/* Grocery family detection (v51). The project named "Groceries" (top level)
+   and its children are treated specially:
+   - store lists (Whole Foods, Costco) and Pantry are INVENTORY lists —
+     checked-off items stay visible in place (dimmed) and can be unchecked
+     back onto the list, because grocery items recur; nothing vanishes while
+     you're mid-store or taking inventory.
+   - the Pantry child renders as a lens: every store item regrouped by its
+     home-location label (Cupboard / Fridge / Freezer). */
+function groceryContext() {
+  const flat = allProjectsFlat();
+  const parent = flat.find(p => /^groceries$/i.test(p.name) && !(p.parentId || p.parent_id));
+  if (!parent) return null;
+  const kids = (state.todoistByParent || {})[parent.id] || [];
+  const pantry = kids.find(p => /^pantry$/i.test(p.name)) || null;
+  const stores = kids.filter(p => !pantry || p.id !== pantry.id);
+  return { parent, pantry, stores };
+}
+function isInventoryList(projectId) {
+  const ctx = groceryContext();
+  if (!ctx) return false;
+  return projectId === ctx.parent.id ||
+    (ctx.pantry && projectId === ctx.pantry.id) ||
+    ctx.stores.some(s => s.id === projectId);
+}
+
+// Completed tasks for an inventory list (rolling ~90-day window, the API max).
+async function fetchCompletedItems(projectId) {
+  try {
+    const since = new Date(Date.now() - 89 * 86400000).toISOString();
+    const until = new Date().toISOString();
+    const d = await todoistFetch("/tasks/completed/by_completion_date?project_id=" + projectId +
+      "&since=" + encodeURIComponent(since) + "&until=" + encodeURIComponent(until) + "&limit=200");
+    const items = Array.isArray(d) ? d : (d.items || d.results || d.tasks || []);
+    return (items || []).map(it => ({
+      id: it.taskId || it.task_id || it.id,
+      content: it.content,
+      labels: it.labels || [],
+      priority: it.priority,
+      sectionId: it.sectionId || it.section_id || null,
+    }));
+  } catch (_) { return []; } // endpoint unavailable → behave like a normal list
+}
+
 // v46: fetch the project's sections alongside its tasks and render tasks
-// grouped under section headers (Groceries' aisle walk-order, etc.). Sections
-// with no open tasks are hidden. Collaborator names load in parallel so
-// assigned tasks can show who owns them.
+// grouped under section headers (Groceries' aisle walk-order, etc.).
+// v51: inventory lists also fetch completed items and show them dimmed
+// inside their section, uncheckable back onto the list.
 async function loadTasks() {
+  const ctx = groceryContext();
+  if (ctx && ctx.pantry && state.activeListId === ctx.pantry.id) return renderPantryLens(ctx);
   const el = $("lists-tasks");
   el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   try {
-    const [tasksData, sectionsData] = await Promise.all([
+    const inventory = isInventoryList(state.activeListId);
+    const [tasksData, sectionsData, completed] = await Promise.all([
       todoistFetch("/tasks?project_id=" + state.activeListId),
       todoistFetch("/sections?project_id=" + state.activeListId).catch(() => null),
+      inventory ? fetchCompletedItems(state.activeListId) : Promise.resolve([]),
       ensureCollaborators(state.activeListId),
     ]);
     const tasks = Array.isArray(tasksData) ? tasksData : (tasksData.tasks || tasksData.items || tasksData.results || []);
     const sections = !sectionsData ? [] :
       (Array.isArray(sectionsData) ? sectionsData : (sectionsData.sections || sectionsData.results || sectionsData.items || []));
     pruneCompletedRecently();
+    const openIds = new Set(tasks.map(t => t.id));
+    const doneItems = (completed || []).filter(c => c.id && !openIds.has(c.id));
+    const doneIds = new Set(doneItems.map(c => c.id));
     const doneExtras = [...state.completedRecently.values()]
       .filter(e => e.kind === "list" && e.data.projectId === state.activeListId)
-      .map(e => e.data.task);
+      .map(e => e.data.task)
+      .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
     el.innerHTML = "";
-    if ((!tasks || tasks.length === 0) && doneExtras.length === 0) {
+    if ((!tasks || tasks.length === 0) && doneItems.length === 0 && doneExtras.length === 0) {
       el.innerHTML = `<div class="empty">Nothing here yet.</div>`; return;
     }
     tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
     const secOf = (t) => t.sectionId || t.section_id || null;
+    const renderGroup = (secId) => {
+      tasks.filter(t => secOf(t) === secId).forEach(t => el.appendChild(buildTaskRow(t)));
+      doneItems.filter(c => (c.sectionId || null) === secId).forEach(c => el.appendChild(buildTaskRow(c, true)));
+    };
     // Tasks with no section come first (matches Todoist's own layout)
-    tasks.filter(t => !secOf(t)).forEach(t => el.appendChild(buildTaskRow(t)));
+    renderGroup(null);
     const secOrd = (s) => s.sectionOrder ?? s.section_order ?? s.order ?? 0;
     sections.slice().sort((a, b) => secOrd(a) - secOrd(b)).forEach(s => {
-      const secTasks = tasks.filter(t => secOf(t) === s.id);
-      if (secTasks.length === 0) return;
+      const hasAny = tasks.some(t => secOf(t) === s.id) || doneItems.some(c => c.sectionId === s.id);
+      if (!hasAny) return;
       const head = document.createElement("div");
       head.className = "list-section-head";
       head.dataset.sectionId = s.id; // drag-drop target (v49)
       head.textContent = s.name;
+      head.addEventListener("click", () => beginSectionRename(head, s)); // v50
       el.appendChild(head);
-      secTasks.forEach(t => el.appendChild(buildTaskRow(t)));
+      renderGroup(s.id);
     });
     doneExtras.forEach(t => el.appendChild(buildTaskRow(t, true)));
+  } catch (e) {
+    el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+  }
+}
+
+/* ---------- Pantry lens (v51) ---------- */
+async function renderPantryLens(ctx) {
+  const el = $("lists-tasks");
+  el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+  try {
+    const perStore = await Promise.all(ctx.stores.map(async (s) => {
+      try {
+        const [d, done] = await Promise.all([
+          todoistFetch("/tasks?project_id=" + s.id),
+          fetchCompletedItems(s.id),
+        ]);
+        const open = Array.isArray(d) ? d : (d.tasks || d.items || d.results || []);
+        const openIds = new Set(open.map(t => t.id));
+        return { store: s, open, done: done.filter(c => c.id && !openIds.has(c.id)) };
+      } catch (_) { return { store: s, open: [], done: [] }; }
+    }));
+    el.innerHTML = "";
+    const total = perStore.reduce((n, r) => n + r.open.length + r.done.length, 0);
+    if (total === 0) { el.innerHTML = `<div class="empty">No items in the store lists yet.</div>`; return; }
+    const badge = (name) => name.split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
+    const locOf = (t) => homeLocOf(t) || "Unsorted";
+    HOME_LOCS.concat(["Unsorted"]).forEach(loc => {
+      const rows = [];
+      perStore.forEach(({ store, open, done }) => {
+        open.filter(t => locOf(t) === loc).forEach(t =>
+          rows.push(buildTaskRow(t, false, { noDrag: true, storeBadge: badge(store.name) })));
+        done.filter(c => locOf(c) === loc).forEach(c =>
+          rows.push(buildTaskRow(c, true, { noDrag: true, storeBadge: badge(store.name) })));
+      });
+      if (!rows.length) return;
+      const head = document.createElement("div");
+      head.className = "list-section-head";
+      head.textContent = loc;
+      el.appendChild(head);
+      rows.forEach(r => el.appendChild(r));
+    });
   } catch (e) {
     el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
   }
@@ -284,12 +381,21 @@ async function ensureCollaborators(projectId) {
 
 const isP1 = (t) => t && (t.priority === 4 || t.priority === "p1");
 
-function buildTaskRow(task, isDone) {
+function buildTaskRow(task, isDone, opts) {
+  opts = opts || {};
   const row = document.createElement("div");
   row.className = "task-row" + (isDone ? " task-done" : ""); row.id = "task-" + task.id;
   row.dataset.taskId = task.id;
   row.dataset.sectionId = task.sectionId || task.section_id || "";
-  if (!isDone) attachDrag(row, task);
+  if (!isDone && !opts.noDrag) attachDrag(row, task);
+  // v50: tap the card (not the checkbox) to edit title + home location
+  if (!isDone) {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".task-cb")) return;
+      if (Date.now() < (drag.suppressClickUntil || 0)) return;
+      openTaskEdit(task, row);
+    });
+  }
   const cb = document.createElement("button");
   cb.className = "task-cb";
   cb.type = "button";
@@ -311,6 +417,13 @@ function buildTaskRow(task, isDone) {
   }
   label.appendChild(document.createTextNode(task.content));
   row.append(cb, label);
+  // Store badge (Pantry lens, v51) — which store this item is bought at
+  if (opts.storeBadge) {
+    const sb = document.createElement("span");
+    sb.className = "store-badge";
+    sb.textContent = opts.storeBadge;
+    row.appendChild(sb);
+  }
   // Assignee chip (shared projects) — first initial of the responsible user
   const uid = task.responsibleUid || task.responsible_uid || null;
   const collab = (state.collabCache || {})[state.activeListId] || {};
@@ -322,6 +435,90 @@ function buildTaskRow(task, isDone) {
     row.appendChild(chip);
   }
   return row;
+}
+
+/* ---------- item edit sheet (v50) ---------- */
+const HOME_LOCS = ["Cupboard", "Fridge", "Freezer"];
+const homeLocOf = (task) => {
+  const m = (task.labels || []).find(l => HOME_LOCS.some(n => n.toLowerCase() === String(l).toLowerCase()));
+  return m ? HOME_LOCS.find(n => n.toLowerCase() === String(m).toLowerCase()) : "";
+};
+
+function openTaskEdit(task) {
+  const old = $("task-edit");
+  if (old) old.remove();
+  const modal = document.createElement("div");
+  modal.className = "modal"; modal.id = "task-edit";
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  card.innerHTML = `
+    <div class="modal-head"><strong>Edit item</strong><button class="btn-icon" id="te-close">✕</button></div>
+    <input id="te-title" class="settings-token-input" type="text" autocomplete="off">
+    <div class="settings-section-label" style="margin-top:16px">Home location</div>
+    <div class="te-locs" id="te-locs"></div>
+    <div class="settings-token-actions" style="margin-top:16px"><button id="te-save" class="settings-btn-primary">Save</button></div>`;
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+  $("te-title").value = task.content;
+  let chosen = homeLocOf(task);
+  const locsEl = $("te-locs");
+  const renderLocs = () => {
+    locsEl.innerHTML = "";
+    HOME_LOCS.forEach(n => {
+      const b = document.createElement("button");
+      b.className = "cap-pick-btn" + (chosen === n ? " te-active" : "");
+      b.textContent = n;
+      b.onclick = () => { chosen = (chosen === n) ? "" : n; renderLocs(); };
+      locsEl.appendChild(b);
+    });
+  };
+  renderLocs();
+  const close = () => modal.remove();
+  $("te-close").onclick = close;
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  $("te-save").onclick = async () => {
+    const newTitle = $("te-title").value.trim() || task.content;
+    const others = (task.labels || []).filter(l => !HOME_LOCS.some(n => n.toLowerCase() === String(l).toLowerCase()));
+    const labels = chosen ? others.concat([chosen]) : others;
+    close();
+    try {
+      await todoistFetch("/tasks/" + task.id, "POST", { content: newTitle, labels });
+      task.content = newTitle; task.labels = labels;
+      toast("Saved");
+      loadTasks();
+    } catch (_) {
+      toast("Couldn't save — try again");
+    }
+  };
+}
+
+/* ---------- section rename (v50) ---------- */
+function beginSectionRename(head, s) {
+  if (head.querySelector("input")) return;
+  const old = s.name;
+  head.textContent = "";
+  const input = document.createElement("input");
+  input.className = "sec-rename-input";
+  input.value = old;
+  head.appendChild(input);
+  input.focus(); input.select();
+  let committed = false;
+  const commit = async () => {
+    if (committed) return; committed = true;
+    const val = input.value.trim();
+    head.textContent = val || old;
+    if (!val || val === old) return;
+    try {
+      await todoistFetch("/sections/" + s.id, "POST", { name: val });
+      s.name = val;
+      toast("Section renamed");
+    } catch (_) {
+      head.textContent = old;
+      toast("Couldn't rename — try again");
+    }
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
 }
 
 async function completeTask(id, ctx) {
@@ -1023,9 +1220,15 @@ function handleCapture(label) {
     case "Reminder":
       openCapSheet("reminder", "Remind me to…", null, state.activeTab === "today" ? todayISO() : null);
       break;
-    case "Item":
-      openCapSheet("item", "Add item…", state.activeListId);
+    case "Item": {
+      // In the Pantry lens, new items are real store tasks — default to the
+      // first store (edit the item afterward to set location/aisle).
+      const ctx = groceryContext();
+      const inPantry = ctx && ctx.pantry && state.activeListId === ctx.pantry.id;
+      const target = (inPantry && ctx.stores[0]) ? ctx.stores[0].id : state.activeListId;
+      openCapSheet("item", "Add item…", target);
       break;
+    }
     case "Note":
       openCapSheet("note", "Quick note…", null);
       break;
