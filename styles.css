@@ -55,6 +55,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .event .time { min-width: 72px; font-variant-numeric: tabular-nums; font-size: 0.82rem;
   color: var(--muted); padding-top: 2px; }
 .event .time.allday { color: var(--accent); font-weight: 600; }
+/* v48: far-left checkbox in Today task rows + aligning spacer on event rows */
+.event > .task-cb { align-self: flex-start; margin-top: 3px; }
+.cb-spacer { width: 20px; flex-shrink: 0; }
 .event .what .title { font-size: 0.95rem; font-weight: 600; }
 .event .what .cal { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
 .event-list.compact .event { padding: 7px 12px; }
@@ -204,7 +207,10 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 
 /* ── Today timeline ─────────────────────────────── */
 .today-tab { display: flex; flex-direction: column; overflow: hidden; }
-.today-timeline { flex: 1; overflow-y: auto; min-height: 0; padding: 8px 16px 80px; display: flex; flex-direction: column; gap: 8px; }
+/* v48: no horizontal padding here — .tab already provides the 16px gutter.
+   The old 16px doubled up (32px total), making Today cards narrower than
+   every other tab's. */
+.today-timeline { flex: 1; overflow-y: auto; min-height: 0; padding: 8px 0 80px; display: flex; flex-direction: column; gap: 8px; }
 
 .now-marker { display: flex; align-items: center; gap: 6px; margin: 4px 0; flex-shrink: 0; }
 .now-dot { width: 10px; height: 10px; border-radius: 50%; background: #e53e3e; flex-shrink: 0; }

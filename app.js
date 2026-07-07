@@ -690,8 +690,13 @@ function fmtTime(date) {
 
 function timelineRow(item, isPast) {
   if (item.type === "event") {
-    // Reuse existing eventRow structure, just mark past
+    // Reuse existing eventRow structure, just mark past.
+    // v48: leading spacer keeps the time column aligned with task rows,
+    // whose far-left slot is the checkbox.
     const row = eventRow({ ev: item.ev, cal: item.ev._cal || { summary: "" } });
+    const spacer = document.createElement("span");
+    spacer.className = "cb-spacer";
+    row.prepend(spacer);
     if (isPast) row.style.opacity = "0.38";
     return row;
   }
@@ -729,11 +734,10 @@ function timelineRow(item, isPast) {
     title.appendChild(flame);
   }
   title.appendChild(document.createTextNode(item.title));
-  const cbRow = document.createElement("div");
-  cbRow.style.cssText = "display:flex;align-items:center;gap:10px;";
-  cbRow.append(cb, title);
-  w.append(cbRow);
-  row.append(timeEl, w);
+  // v48: checkbox lives at the far left (Todoist/Notes convention),
+  // then the time column, then the title.
+  w.append(title);
+  row.append(cb, timeEl, w);
   return row;
 }
 async function renderWeek() {
