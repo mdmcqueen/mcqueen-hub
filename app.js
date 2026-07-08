@@ -224,7 +224,7 @@ async function renderLists() {
   }
 }
 
-function buildProjectBar() {
+function buildProjectBar(animate) {
   const bar = $("lists-project-bar");
   bar.innerHTML = "";
   const projectsOff = getProjectsOff();
@@ -232,6 +232,7 @@ function buildProjectBar() {
   visible.forEach(p => {
     const btn = document.createElement("button");
     btn.className = "lists-project-btn" + (p.id === state.activeListId ? " active" : "") + (p._depth ? " sub" : "");
+    if (animate && p.id === state.activeListId) btn.classList.add("pill-bump"); // v64
     btn.dataset.pid = p.id; // drag-drop target (v49)
     btn.textContent = p.name;
     // v59: needed-count badge on inventory store pills (from list cache)
@@ -247,7 +248,7 @@ function buildProjectBar() {
     btn.onclick = () => {
       state.activeListId = p.id;
       localStorage.setItem("hub.activeList", p.id);
-      buildProjectBar();
+      buildProjectBar(true); // v64: bump the newly active pill
       loadTasks();
       updateWakeLock(); // v58: lock follows the active list
     };
@@ -265,6 +266,9 @@ function buildProjectBar() {
         e.stopPropagation();
         localStorage.setItem("hub.tripMode", tripOn() ? "0" : "1");
         tripBtn.classList.toggle("on", tripOn());
+        tripBtn.classList.remove("pill-bump");
+        void tripBtn.offsetWidth; // v64: restart the bump animation
+        tripBtn.classList.add("pill-bump");
         $("lists-tasks").classList.toggle("trip", tripOn());
       });
       grp.append(btn, tripBtn);
@@ -273,7 +277,19 @@ function buildProjectBar() {
       bar.appendChild(btn);
     }
   });
+  syncPillbarHeight(); // v64: keep sticky section heads flush under the bar
 }
+
+// v64: .list-section-head's sticky top is `env(safe-area-inset-top) +
+// --pillbar-h` (see styles.css) so it stacks directly under the pill bar
+// regardless of badge counts/font scaling changing the bar's real height.
+function syncPillbarHeight() {
+  const bar = $("lists-project-bar");
+  if (!bar || bar.hidden) return;
+  const h = bar.getBoundingClientRect().height;
+  if (h > 0) document.documentElement.style.setProperty("--pillbar-h", h + "px");
+}
+window.addEventListener("resize", syncPillbarHeight);
 
 /* Grocery family detection (v51). The project named "Groceries" (top level)
    and its children are treated specially:
