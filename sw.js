@@ -1,5 +1,5 @@
 /* McQueen Hub service worker — minimal shell cache; APIs always go to network. */
-const CACHE = "hub-shell-v60";
+const CACHE = "hub-shell-v61";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {

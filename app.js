@@ -483,14 +483,16 @@ function renderPantryData(el, perStore) {
   HOME_LOCS.concat(["Unsorted"]).forEach(loc => {
     const rows = [];
     perStore.forEach(({ store, open, done }) => {
+      // v61: draggable — dropping into another group re-labels the item
       open.filter(t => locOf(t) === loc).forEach(t =>
-        rows.push(buildTaskRow(t, false, { noDrag: true, storeBadge: badge(store.name) })));
+        rows.push(buildTaskRow(t, false, { storeBadge: badge(store.name), loc })));
       done.filter(c => locOf(c) === loc).forEach(c =>
-        rows.push(buildTaskRow(c, true, { noDrag: true, storeBadge: badge(store.name) })));
+        rows.push(buildTaskRow(c, true, { storeBadge: badge(store.name), loc })));
     });
     if (!rows.length) return;
     const head = document.createElement("div");
     head.className = "list-section-head";
+    head.dataset.loc = loc; // v61: drag-drop target
     head.textContent = loc;
     frag.appendChild(head);
     rows.forEach(r => frag.appendChild(r));
@@ -624,6 +626,7 @@ function attachSwipe(wrap, row, onDelete) {
   let lastX = 0, lastT = 0, vel = 0;
   const threshold = () => Math.min(200, w * 0.5);
   row.addEventListener("touchstart", (e) => {
+    if (e.target.closest(".qty-btn, .task-cb, button")) { mode = "v"; return; } // v61
     const t = e.touches[0];
     sx = t.clientX; sy = t.clientY; dx = 0; mode = null; vel = 0;
     lastX = t.clientX; lastT = e.timeStamp;
@@ -633,6 +636,7 @@ function attachSwipe(wrap, row, onDelete) {
     closeOpenSwipe(wrap);
   }, { passive: true });
   row.addEventListener("touchmove", (e) => {
+    if (drag.active) { mode = "v"; return; } // v61: never fight an active drag
     const t = e.touches[0];
     const mx = t.clientX - sx, my = t.clientY - sy;
     if (!mode) {
@@ -678,6 +682,7 @@ function buildTaskRow(task, isDone, opts) {
   row.id = "task-" + task.id;
   row.dataset.taskId = task.id;
   row.dataset.sectionId = task.sectionId || task.section_id || "";
+  if (opts.loc !== undefined) row.dataset.loc = opts.loc; // v61: Pantry lens group
   if (!isDone && !opts.noDrag) attachDrag(row, task);
   // v50: tap the card (not the checkbox) to edit title + home location
   if (!isDone) {
@@ -932,12 +937,12 @@ const drag = {
 
 function attachDrag(row, task) {
   row.addEventListener("touchstart", (e) => {
-    if (e.target.closest(".task-cb")) return;
+    if (e.target.closest(".task-cb, .qty-btn, button")) return; // v61
     const t = e.touches[0];
     startDragCandidate(row, task, t.clientX, t.clientY);
   }, { passive: true });
   row.addEventListener("mousedown", (e) => {
-    if (e.button !== 0 || e.target.closest(".task-cb")) return;
+    if (e.button !== 0 || e.target.closest(".task-cb, .qty-btn, button")) return;
     startDragCandidate(row, task, e.clientX, e.clientY);
   });
 }
@@ -945,7 +950,7 @@ function attachDrag(row, task) {
 function startDragCandidate(row, task, x, y) {
   cancelDragCandidate();
   drag.row = row; drag.task = task; drag.startX = x; drag.startY = y;
-  drag.timer = setTimeout(beginDrag, 320);
+  drag.timer = setTimeout(beginDrag, 280); // v61: slightly quicker to arm
 }
 
 function cancelDragCandidate() {
@@ -993,7 +998,10 @@ function dragMove(x, y) {
     return;
   }
   const head = el.closest(".list-section-head");
-  if (head) { head.classList.add("drop-after"); drag.overHead = head; }
+  if (head && (head.dataset.sectionId || head.dataset.loc !== undefined)) {
+    head.classList.add("drop-after");
+    drag.overHead = head;
+  }
 }
 
 function clearDropMarks() {
@@ -1035,6 +1043,23 @@ async function finishDrag() {
     }
     if (tRow || head) {
       const target = tRow || head;
+      // v61: Pantry lens — groups are home-location labels, so a drop there
+      // means "this lives in the Fridge now," not a section move.
+      if (target.dataset.loc !== undefined || row.dataset.loc !== undefined) {
+        if (tRow) { const tw = wrapOf(tRow); tw.parentNode.insertBefore(wrapOf(row), after ? tw.nextSibling : tw); }
+        else head.parentNode.insertBefore(wrapOf(row), head.nextSibling);
+        const newLoc = target.dataset.loc || "Unsorted";
+        const oldLoc = row.dataset.loc || "Unsorted";
+        row.dataset.loc = newLoc;
+        if (newLoc !== oldLoc) {
+          const others = (task.labels || []).filter(l => !HOME_LOCS.some(n => n.toLowerCase() === String(l).toLowerCase()));
+          const labels = (newLoc === "Unsorted") ? others : others.concat([newLoc]);
+          await todoistFetch("/tasks/" + task.id, "POST", { labels });
+          task.labels = labels;
+          toast(newLoc === "Unsorted" ? "Marked unsorted" : "Moved to " + newLoc);
+        }
+        return;
+      }
       const newSec = target.dataset.sectionId || "";
       const oldSec = row.dataset.sectionId || "";
       // v53: rows live inside swipe wrappers — move the wrapper
@@ -1061,17 +1086,19 @@ function wireDrag() {
       else sdragMove(t.clientX, t.clientY);
     } else if (drag.timer) {
       const t = e.touches[0];
-      if (Math.abs(t.clientX - drag.startX) > 8 || Math.abs(t.clientY - drag.startY) > 8) cancelDragCandidate();
+      // v61: 14px tolerance — natural finger tremor was cancelling the
+      // long-press before it could arm, making drag feel broken.
+      if (Math.abs(t.clientX - drag.startX) > 14 || Math.abs(t.clientY - drag.startY) > 14) cancelDragCandidate();
     } else if (sdrag.timer) {
       const t = e.touches[0];
-      if (Math.abs(t.clientX - sdrag.startX) > 8 || Math.abs(t.clientY - sdrag.startY) > 8) cancelSettingsDrag();
+      if (Math.abs(t.clientX - sdrag.startX) > 14 || Math.abs(t.clientY - sdrag.startY) > 14) cancelSettingsDrag();
     }
   }, { passive: false });
   document.addEventListener("mousemove", (e) => {
     if (drag.active) dragMove(e.clientX, e.clientY);
     else if (sdrag.active) sdragMove(e.clientX, e.clientY);
-    else if (drag.timer && (Math.abs(e.clientX - drag.startX) > 8 || Math.abs(e.clientY - drag.startY) > 8)) cancelDragCandidate();
-    else if (sdrag.timer && (Math.abs(e.clientX - sdrag.startX) > 8 || Math.abs(e.clientY - sdrag.startY) > 8)) cancelSettingsDrag();
+    else if (drag.timer && (Math.abs(e.clientX - drag.startX) > 14 || Math.abs(e.clientY - drag.startY) > 14)) cancelDragCandidate();
+    else if (sdrag.timer && (Math.abs(e.clientX - sdrag.startX) > 14 || Math.abs(e.clientY - sdrag.startY) > 14)) cancelSettingsDrag();
   });
   const up = () => {
     if (drag.active) finishDrag(); else cancelDragCandidate();
