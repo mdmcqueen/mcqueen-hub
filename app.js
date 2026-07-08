@@ -234,6 +234,16 @@ function buildProjectBar() {
     btn.className = "lists-project-btn" + (p.id === state.activeListId ? " active" : "") + (p._depth ? " sub" : "");
     btn.dataset.pid = p.id; // drag-drop target (v49)
     btn.textContent = p.name;
+    // v59: needed-count badge on inventory store pills (from list cache)
+    if (isInventoryList(p.id)) {
+      const n = neededCount(p.id);
+      if (n != null) {
+        const pc = document.createElement("span");
+        pc.className = "pill-count";
+        pc.textContent = n;
+        btn.appendChild(pc);
+      }
+    }
     btn.onclick = () => {
       state.activeListId = p.id;
       localStorage.setItem("hub.activeList", p.id);
@@ -369,6 +379,7 @@ function renderListData(el, data) {
   // v56: inventory items stay readable when checked — the checkmark means
   // "stocked at home," not "done with this forever."
   el.classList.toggle("inventory", !!inventory);
+  el.classList.toggle("trip", !!inventory && tripOn()); // v59
   pruneCompletedRecently();
   const openIds = new Set(tasks.map(t => t.id));
   const doneIds = new Set(doneItems.map(c => c.id));
@@ -377,6 +388,7 @@ function renderListData(el, data) {
     .map(e => e.data.task)
     .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
   const frag = document.createDocumentFragment();
+  if (inventory) frag.appendChild(buildTripToggle(el)); // v59
   const hasContent = (tasks && tasks.length > 0) || doneItems.length > 0 || doneExtras.length > 0;
   if (!hasContent && (!sections || sections.length === 0)) {
     const empty = document.createElement("div");
@@ -447,6 +459,7 @@ async function loadTasks() {
     const data = { tasks, sections, doneItems, inventory };
     writeListCache(state.activeListId, { tasks, sections, doneItems });
     renderListData(el, data);
+    if (inventory) buildProjectBar(); // v59: refresh needed-count badges
   } catch (e) {
     if (!el.querySelector(".task-row")) {
       el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
@@ -458,7 +471,9 @@ async function loadTasks() {
 
 /* ---------- Pantry lens (v51) ---------- */
 function renderPantryData(el, perStore) {
+  el.classList.toggle("trip", tripOn()); // v59
   const frag = document.createDocumentFragment();
+  frag.appendChild(buildTripToggle(el));
   const total = perStore.reduce((n, r) => n + r.open.length + r.done.length, 0);
   if (total === 0) {
     el.innerHTML = `<div class="empty">No items in the store lists yet.</div>`; return;
@@ -539,13 +554,41 @@ const isP1 = (t) => t && (t.priority === 4 || t.priority === "p1");
    machine-readable here). Absent = 1. */
 const qtyOf = (t) => {
   const m = /(?:^|\n)qty:\s*(\d+)\s*$/im.exec((t && t.description) || "");
-  return m ? Math.max(1, parseInt(m[1], 10)) : 1;
+  return m ? Math.max(0, parseInt(m[1], 10)) : 1; // v59: 0 allowed = "not needed, keep on list"
 };
 async function saveQty(task, q) {
   const base = ((task.description) || "").replace(/(?:^|\n)qty:\s*\d+\s*$/gim, "").trim();
-  const desc = q > 1 ? (base ? base + "\n" : "") + "qty: " + q : base;
+  const desc = q === 1 ? base : (base ? base + "\n" : "") + "qty: " + q;
   await todoistFetch("/tasks/" + task.id, "POST", { description: desc });
   task.description = desc;
+}
+
+/* v59: Trip mode — at the store, show only what you need: hides checked
+   (stocked) items and qty-0 items, bumps touch targets. Persists across
+   relaunch so a mid-shop suspension comes back in trip mode. */
+const tripOn = () => localStorage.getItem("hub.tripMode") === "1";
+function buildTripToggle(el) {
+  const wrap = document.createElement("label");
+  wrap.className = "inv-toggle trip-toggle";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = tripOn();
+  cb.addEventListener("change", () => {
+    localStorage.setItem("hub.tripMode", cb.checked ? "1" : "0");
+    el.classList.toggle("trip", cb.checked);
+    buildProjectBar(); // counts stay, but keep pills in sync
+  });
+  const txt = document.createElement("span");
+  txt.textContent = "🛒 Trip mode — only what we need";
+  wrap.append(cb, txt);
+  return wrap;
+}
+
+// v59: "N items" needed per store pill, computed from the list cache
+function neededCount(pid) {
+  const c = readListCache(pid);
+  if (!c || !c.tasks) return null;
+  return c.tasks.filter(t => qtyOf(t) >= 1).length;
 }
 
 // v55: recurring tasks "roll forward" on completion rather than finishing —
@@ -678,11 +721,15 @@ function buildTaskRow(task, isDone, opts) {
     const plus = document.createElement("button");
     plus.type = "button"; plus.className = "qty-btn"; plus.textContent = "+";
     let q = qtyOf(task);
-    const renderQ = () => { num.textContent = q; step.classList.toggle("qty-one", q <= 1); };
+    const renderQ = () => {
+      num.textContent = q;
+      step.classList.toggle("qty-one", q === 1);
+      row.classList.toggle("qty-zero", q === 0); // hidden in trip mode
+    };
     renderQ();
     let saveTimer = null;
     const change = (d) => {
-      q = Math.max(1, q + d);
+      q = Math.max(0, q + d);
       renderQ();
       clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => {
@@ -1248,6 +1295,11 @@ function eventRow({ ev, cal }) {
   const c = document.createElement("div"); c.className = "cal";
   c.textContent = cal.summaryOverride || cal.summary || "";
   w.append(ti, c); row.append(t, w);
+  // v59: tap an event to open it in Google Calendar for editing
+  if (ev.htmlLink) {
+    row.classList.add("linked");
+    row.addEventListener("click", () => window.open(ev.htmlLink, "_blank"));
+  }
   return row;
 }
 function visible(events) {
@@ -1273,7 +1325,28 @@ async function fetchTasksByFilter(filter) {
     for (const id of [...visibleIds]) {
       if (isInventoryList(id)) visibleIds.delete(id);
     }
-    const tasks = await todoistFetchAll("/tasks?filter=" + encodeURIComponent(filter));
+    // v59 ROOT-CAUSE FIX for phantom Today/Overdue items: the plain /tasks
+    // endpoint silently IGNORES an unknown ?filter= param — once pagination
+    // (v51) fetched every page, "filter=today" was returning the entire
+    // account. Use the dedicated filter endpoint, and apply the date
+    // predicate locally regardless, so a misbehaving endpoint can never
+    // leak undated/old tasks into the timeline again.
+    let tasks;
+    try {
+      tasks = await todoistFetchAll("/tasks/filter?query=" + encodeURIComponent(filter));
+    } catch (_) {
+      tasks = await todoistFetchAll("/tasks");
+    }
+    const today = todayISO();
+    const dayOf = (t) => {
+      const d = t.dueDate || t.due_date || (t.due && (t.due.date || t.due.datetime)) || null;
+      return d ? String(d).slice(0, 10) : null;
+    };
+    tasks = (tasks || []).filter(t => {
+      const day = dayOf(t);
+      if (!day) return false;
+      return filter === "today" ? day === today : day < today;
+    });
     return tasks.filter(t => visibleIds.has(t.projectId || t.project_id));
   } catch (e) { return []; }
 }
@@ -1388,6 +1461,20 @@ function buildTimeline(items, tmrItems, now, briefText, overdueItems) {
     el.appendChild(oBody);
   }
 
+  // Meal card (v59) — the family dinner cadence, glanceable at the top.
+  // Mon salmon / Tue chicken / Wed pasta / Thu turkey / Fri pizza-or-sushi;
+  // weekends ad hoc (no card). TODO: fold in Erika's prepped meals once
+  // that rhythm settles.
+  const MEALS = { Monday: "Salmon", Tuesday: "Chicken", Wednesday: "Pasta",
+    Thursday: "Turkey", Friday: "Pizza or sushi" };
+  const todayMeal = MEALS[fmt(now, { weekday: "long" })];
+  if (todayMeal) {
+    const mc = document.createElement("div");
+    mc.className = "meal-card";
+    mc.innerHTML = `<span class="meal-ico">🍽</span><span><span class="meal-label">Tonight</span> ${todayMeal}</span>`;
+    el.appendChild(mc);
+  }
+
   const timed = items.filter(i => i.time);
   const untimed = items.filter(i => !i.time);
   const nowMs = now.getTime();
@@ -1401,7 +1488,9 @@ function buildTimeline(items, tmrItems, now, briefText, overdueItems) {
   let nowMarker = null;
   timed.forEach((item, i) => {
     const isFuture = item.time > now;
-    const isPast = !isFuture;
+    // v59: an event that has started but not ended is ACTIVE, not past —
+    // no dimming, accent edge, "· now" in the time column.
+    const ongoing = !isFuture && item.endTime && item.endTime > now;
 
     // Insert now marker before first future item
     if (isFuture && (i === 0 || timed[i - 1].time <= now)) {
@@ -1412,7 +1501,7 @@ function buildTimeline(items, tmrItems, now, briefText, overdueItems) {
       el.appendChild(nowMarker);
     }
 
-    el.appendChild(timelineRow(item, isPast));
+    el.appendChild(timelineRow(item, !isFuture && !ongoing, ongoing));
   });
 
   // If all items are past, add now marker at end of timed section
@@ -1503,7 +1592,7 @@ function fmtTime(date) {
   return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: CONFIG.TZ });
 }
 
-function timelineRow(item, isPast) {
+function timelineRow(item, isPast, ongoing) {
   if (item.type === "event") {
     // Reuse existing eventRow structure, just mark past.
     // v48: leading spacer keeps the time column aligned with task rows,
@@ -1512,7 +1601,13 @@ function timelineRow(item, isPast) {
     const spacer = document.createElement("span");
     spacer.className = "cb-spacer";
     row.prepend(spacer);
-    if (isPast) row.style.opacity = "0.38";
+    if (ongoing) {
+      row.classList.add("ongoing"); // v59: started, not finished — active
+      const t = row.querySelector(".time");
+      if (t) t.textContent += " · now";
+    } else if (isPast) {
+      row.style.opacity = "0.38";
+    }
     return row;
   }
   const isDone = !!item.isDone;
@@ -2088,10 +2183,12 @@ function wirePullToRefresh() {
     if (startY === null) return;
     const dy = e.touches[0].clientY - startY;
     if (dy > 12 && window.scrollY <= 0) {
-      pulling = dy > 70;
+      // v59: elastic resistance (diminishing returns like native rubber-band)
+      // + a much longer pull (140px) before triggering — it fired too easily.
+      pulling = dy > 140;
       ptr.hidden = false;
       ptr.textContent = pulling ? "Release to refresh" : "Pull to refresh";
-      ptr.style.height = Math.min(dy * 0.45, 52) + "px";
+      ptr.style.height = Math.min(64, 64 * (1 - Math.exp(-dy / 180))) + "px";
     }
   }, { passive: true });
   document.addEventListener("touchend", async () => {
