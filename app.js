@@ -251,7 +251,27 @@ function buildProjectBar() {
       loadTasks();
       updateWakeLock(); // v58: lock follows the active list
     };
-    bar.appendChild(btn);
+    // v62: active inventory pill grows a layered cart segment that toggles
+    // trip mode (only unchecked items with qty ≥ 1).
+    if (p.id === state.activeListId && isInventoryList(p.id)) {
+      const grp = document.createElement("div");
+      grp.className = "pill-group";
+      const tripBtn = document.createElement("button");
+      tripBtn.type = "button";
+      tripBtn.className = "pill-trip" + (tripOn() ? " on" : "");
+      tripBtn.title = "Trip mode — only what we need";
+      tripBtn.innerHTML = `<i class="ti ti-shopping-cart" aria-hidden="true"></i>`;
+      tripBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        localStorage.setItem("hub.tripMode", tripOn() ? "0" : "1");
+        tripBtn.classList.toggle("on", tripOn());
+        $("lists-tasks").classList.toggle("trip", tripOn());
+      });
+      grp.append(btn, tripBtn);
+      bar.appendChild(grp);
+    } else {
+      bar.appendChild(btn);
+    }
   });
 }
 
@@ -309,9 +329,11 @@ async function fetchCompletedItems(projectId) {
     return (items || []).map(it => ({
       id: it.taskId || it.task_id || it.id,
       content: it.content,
+      description: it.description || "",
       labels: it.labels || [],
       priority: it.priority,
       sectionId: it.sectionId || it.section_id || null,
+      childOrder: it.childOrder ?? it.child_order ?? null, // v62: manual order
     }));
   } catch (_) { return []; } // endpoint unavailable → behave like a normal list
 }
@@ -323,11 +345,7 @@ async function fetchCompletedItems(projectId) {
 // v53: section headers show an edit hint and stay visible even when empty
 // (a freshly added section must be visible to be usable).
 function setSectionHeadContent(head, name) {
-  head.textContent = name;
-  const hint = document.createElement("span");
-  hint.className = "sec-edit-hint";
-  hint.textContent = "✎";
-  head.appendChild(hint);
+  head.textContent = name; // v62: pencil hint removed — tap still renames
 }
 
 // "+ Add section" control at the bottom of real (non-lens) lists (v53).
@@ -388,7 +406,6 @@ function renderListData(el, data) {
     .map(e => e.data.task)
     .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
   const frag = document.createDocumentFragment();
-  if (inventory) frag.appendChild(buildTripToggle(el)); // v59
   const hasContent = (tasks && tasks.length > 0) || doneItems.length > 0 || doneExtras.length > 0;
   if (!hasContent && (!sections || sections.length === 0)) {
     const empty = document.createElement("div");
@@ -401,9 +418,18 @@ function renderListData(el, data) {
   }
   tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
   const secOf = (t) => t.sectionId || t.section_id || null;
+  const ordOf = (t) => t.childOrder ?? t.child_order ?? t.order ?? Number.MAX_SAFE_INTEGER;
   const renderGroup = (secId) => {
-    tasks.filter(t => secOf(t) === secId).forEach(t => frag.appendChild(buildTaskRow(t)));
-    doneItems.filter(c => (c.sectionId || null) === secId).forEach(c => frag.appendChild(buildTaskRow(c, true)));
+    const open = tasks.filter(t => secOf(t) === secId).map(t => ({ t, done: false }));
+    const done = doneItems.filter(c => (c.sectionId || null) === secId).map(t => ({ t, done: true }));
+    let group = open.concat(done);
+    if (inventory) {
+      // v62: ONE manual order per section — checked items keep their shelf
+      // position instead of sinking to the bottom, so Michael can arrange
+      // items to match how he picks them off the shelf.
+      group.sort((a, b) => ordOf(a.t) - ordOf(b.t));
+    }
+    group.forEach(({ t, done: d }) => frag.appendChild(buildTaskRow(t, d)));
   };
   // Tasks with no section come first (matches Todoist's own layout)
   renderGroup(null);
@@ -473,14 +499,13 @@ async function loadTasks() {
 function renderPantryData(el, perStore) {
   el.classList.toggle("trip", tripOn()); // v59
   const frag = document.createDocumentFragment();
-  frag.appendChild(buildTripToggle(el));
   const total = perStore.reduce((n, r) => n + r.open.length + r.done.length, 0);
   if (total === 0) {
     el.innerHTML = `<div class="empty">No items in the store lists yet.</div>`; return;
   }
   const badge = (name) => name.split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
   const locOf = (t) => homeLocOf(t) || "Unsorted";
-  HOME_LOCS.concat(["Unsorted"]).forEach(loc => {
+  currentLocs().concat(["Unsorted"]).forEach(loc => {
     const rows = [];
     perStore.forEach(({ store, open, done }) => {
       // v61: draggable — dropping into another group re-labels the item
@@ -508,10 +533,12 @@ async function renderPantryLens(ctx) {
   state._lastList = state.activeListId;
   if (switching || !el.hasChildNodes()) {
     const cached = readListCache(ctx.pantry.id);
+    if (cached && cached.locs) state.pantryLocs = cached.locs; // v62
     if (cached && cached.perStore) renderPantryData(el, cached.perStore); // v58 instant paint
     else el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   }
   try {
+    await getPantryLocs(ctx); // v62: groups come from Pantry's sections
     const perStore = await Promise.all(ctx.stores.map(async (s) => {
       try {
         const [open, done] = await Promise.all([
@@ -522,7 +549,7 @@ async function renderPantryLens(ctx) {
         return { store: s, open, done: done.filter(c => c.id && !openIds.has(c.id)) };
       } catch (_) { return { store: s, open: [], done: [] }; }
     }));
-    writeListCache(ctx.pantry.id, { perStore });
+    writeListCache(ctx.pantry.id, { perStore, locs: state.pantryLocs });
     renderPantryData(el, perStore);
   } catch (e) {
     if (!el.querySelector(".task-row")) {
@@ -568,23 +595,9 @@ async function saveQty(task, q) {
 /* v59: Trip mode — at the store, show only what you need: hides checked
    (stocked) items and qty-0 items, bumps touch targets. Persists across
    relaunch so a mid-shop suspension comes back in trip mode. */
+// v62: trip mode toggles from the cart segment attached to the active pill
+// (Spotify-style layered chip) — the in-list checkbox row is gone.
 const tripOn = () => localStorage.getItem("hub.tripMode") === "1";
-function buildTripToggle(el) {
-  const wrap = document.createElement("label");
-  wrap.className = "inv-toggle trip-toggle";
-  const cb = document.createElement("input");
-  cb.type = "checkbox";
-  cb.checked = tripOn();
-  cb.addEventListener("change", () => {
-    localStorage.setItem("hub.tripMode", cb.checked ? "1" : "0");
-    el.classList.toggle("trip", cb.checked);
-    buildProjectBar(); // counts stay, but keep pills in sync
-  });
-  const txt = document.createElement("span");
-  txt.textContent = "🛒 Trip mode — only what we need";
-  wrap.append(cb, txt);
-  return wrap;
-}
 
 // v59: "N items" needed per store pill, computed from the list cache
 function neededCount(pid) {
@@ -683,7 +696,9 @@ function buildTaskRow(task, isDone, opts) {
   row.dataset.taskId = task.id;
   row.dataset.sectionId = task.sectionId || task.section_id || "";
   if (opts.loc !== undefined) row.dataset.loc = opts.loc; // v61: Pantry lens group
-  if (!isDone && !opts.noDrag) attachDrag(row, task);
+  // v62: checked items are draggable too on inventory lists (manual order)
+  const draggable = !opts.noDrag && (!isDone || isInventoryList(state.activeListId));
+  if (draggable) attachDrag(row, task);
   // v50: tap the card (not the checkbox) to edit title + home location
   if (!isDone) {
     row.addEventListener("click", (e) => {
@@ -706,13 +721,7 @@ function buildTaskRow(task, isDone, opts) {
   });
   const label = document.createElement("span");
   label.className = "task-label";
-  if (isP1(task)) {
-    const flame = document.createElement("span");
-    flame.className = "task-flame";
-    flame.textContent = "🔥";
-    label.appendChild(flame);
-  }
-  label.appendChild(document.createTextNode(task.content));
+  label.textContent = task.content; // v62: 🔥 priority feature retired
   row.append(cb, label);
   // v57: − qty + stepper on inventory (grocery) lists
   if (isInventoryList(state.activeListId)) {
@@ -796,10 +805,25 @@ const wrapOf = (el) => (el && el.parentNode && el.parentNode.classList &&
   el.parentNode.classList.contains("swipe-wrap")) ? el.parentNode : el;
 
 /* ---------- item edit sheet (v50) ---------- */
+// v62: home locations are DYNAMIC — the Pantry project's sections define the
+// groups (Michael manages them in Todoist), with matching labels on items.
+// HOME_LOCS is only the cold-start fallback.
 const HOME_LOCS = ["Cupboard", "Fridge", "Freezer"];
+const currentLocs = () => state.pantryLocs || HOME_LOCS;
+async function getPantryLocs(ctx) {
+  if (state.pantryLocs) return state.pantryLocs;
+  try {
+    const secs = await todoistFetchAll("/sections?project_id=" + ctx.pantry.id);
+    const ord = (s) => s.sectionOrder ?? s.section_order ?? s.order ?? 0;
+    const names = secs.slice().sort((a, b) => ord(a) - ord(b)).map(s => s.name);
+    state.pantryLocs = names.length ? names : HOME_LOCS.slice();
+  } catch (_) { state.pantryLocs = HOME_LOCS.slice(); }
+  return state.pantryLocs;
+}
 const homeLocOf = (task) => {
-  const m = (task.labels || []).find(l => HOME_LOCS.some(n => n.toLowerCase() === String(l).toLowerCase()));
-  return m ? HOME_LOCS.find(n => n.toLowerCase() === String(m).toLowerCase()) : "";
+  const locs = currentLocs();
+  const m = (task.labels || []).find(l => locs.some(n => n.toLowerCase() === String(l).toLowerCase()));
+  return m ? locs.find(n => n.toLowerCase() === String(m).toLowerCase()) : "";
 };
 
 function openTaskEdit(task) {
@@ -823,7 +847,7 @@ function openTaskEdit(task) {
   const locsEl = $("te-locs");
   const renderLocs = () => {
     locsEl.innerHTML = "";
-    HOME_LOCS.forEach(n => {
+    currentLocs().forEach(n => {
       const b = document.createElement("button");
       b.className = "cap-pick-btn" + (chosen === n ? " te-active" : "");
       b.textContent = n;
@@ -837,7 +861,7 @@ function openTaskEdit(task) {
   modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
   $("te-save").onclick = async () => {
     const newTitle = $("te-title").value.trim() || task.content;
-    const others = (task.labels || []).filter(l => !HOME_LOCS.some(n => n.toLowerCase() === String(l).toLowerCase()));
+    const others = (task.labels || []).filter(l => !currentLocs().some(n => n.toLowerCase() === String(l).toLowerCase()));
     const labels = chosen ? others.concat([chosen]) : others;
     close();
     try {
@@ -990,7 +1014,7 @@ function dragMove(x, y) {
     return;
   }
   const row2 = el.closest(".task-row");
-  if (row2 && row2 !== drag.row && !row2.classList.contains("task-done") && row2.dataset.taskId) {
+  if (row2 && row2 !== drag.row && row2.dataset.taskId) {
     const r = row2.getBoundingClientRect();
     drag.after = y > r.top + r.height / 2;
     row2.classList.add(drag.after ? "drop-after" : "drop-before");
@@ -1052,7 +1076,7 @@ async function finishDrag() {
         const oldLoc = row.dataset.loc || "Unsorted";
         row.dataset.loc = newLoc;
         if (newLoc !== oldLoc) {
-          const others = (task.labels || []).filter(l => !HOME_LOCS.some(n => n.toLowerCase() === String(l).toLowerCase()));
+          const others = (task.labels || []).filter(l => !currentLocs().some(n => n.toLowerCase() === String(l).toLowerCase()));
           const labels = (newLoc === "Unsorted") ? others : others.concat([newLoc]);
           await todoistFetch("/tasks/" + task.id, "POST", { labels });
           task.labels = labels;
@@ -1227,7 +1251,7 @@ async function todoistSync(commands) {
 // if the sync call fails the optimistic order survives until next load.
 async function persistReorder(sectionId) {
   const items = [...$("lists-tasks").querySelectorAll(".task-row")]
-    .filter(r => (r.dataset.sectionId || "") === (sectionId || "") && r.dataset.taskId && !r.classList.contains("task-done"))
+    .filter(r => (r.dataset.sectionId || "") === (sectionId || "") && r.dataset.taskId)
     .map((r, i) => ({ id: r.dataset.taskId, child_order: i + 1 }));
   if (items.length < 2) return;
   try { await todoistSync([{ type: "item_reorder", args: { items } }]); }
@@ -1496,9 +1520,11 @@ function buildTimeline(items, tmrItems, now, briefText, overdueItems) {
     Thursday: "Turkey", Friday: "Pizza or sushi" };
   const todayMeal = MEALS[fmt(now, { weekday: "long" })];
   if (todayMeal) {
+    // v62: event-row structure so the meal text aligns with card titles below
     const mc = document.createElement("div");
-    mc.className = "meal-card";
-    mc.innerHTML = `<span class="meal-ico">🍽</span><span><span class="meal-label">Tonight</span> ${todayMeal}</span>`;
+    mc.className = "event meal-card";
+    mc.innerHTML = `<span class="cb-spacer"></span><div class="time allday">🍽</div>` +
+      `<div class="what"><div class="title"><span class="meal-label">Tonight</span>${todayMeal}</div></div>`;
     el.appendChild(mc);
   }
 
@@ -1665,13 +1691,7 @@ function timelineRow(item, isPast, ongoing) {
     else completeTask(item.id, { kind: item.overdueDate ? "overdue" : "today", data: { item } });
   });
   const title = document.createElement("div"); title.className = "title";
-  if (isP1(item.task)) {
-    const flame = document.createElement("span");
-    flame.className = "task-flame";
-    flame.textContent = "🔥";
-    title.appendChild(flame);
-  }
-  title.appendChild(document.createTextNode(item.title));
+  title.textContent = item.title; // v62: 🔥 priority feature retired
   // v48: checkbox lives at the far left (Todoist/Notes convention),
   // then the time column, then the title.
   w.append(title);
@@ -1811,11 +1831,13 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
   if (tp) tp.remove();
   if (type === "task" || type === "reminder" || type === "event") {
     const defaultDate = dueDate || "";
-    chip.textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
+    $("cap-due-txt").textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
     chip.dataset.date = defaultDate;
+    $("cap-due-input").value = defaultDate;
     chip.hidden = false;
     timeChip.dataset.time = "";
-    timeChip.textContent = "No time";
+    $("cap-time-txt").textContent = "No time";
+    $("cap-time-input").value = "";
     timeChip.hidden = false;
   } else {
     chip.hidden = true;
@@ -2298,82 +2320,18 @@ function wireUI() {
   $("cap-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitCapSheet(); }
   });
-  $("cap-due-chip").addEventListener("click", () => {
-    let qp = $("cap-quick-pick");
-    if (qp) { qp.remove(); return; }
-    const tp = $("cap-time-pick");
-    if (tp) tp.remove();
-    // Build quick-pick inline (to the right of chip, inside cap-meta)
-    qp = document.createElement("div");
-    qp.id = "cap-quick-pick";
-    qp.className = "cap-quick-pick";
-    const currentDate = $("cap-due-chip").dataset.date;
-    const todayDate = todayISO();
-    const tomorrowDate = isoPlus(todayDate, 1);
-    const isCustom = currentDate !== todayDate && currentDate !== tomorrowDate && currentDate !== "";
-    const allOpts = [
-      { label: "Today", date: todayDate },
-      { label: "Tomorrow", date: tomorrowDate },
-    ];
-    // Only show options that differ from the current selection
-    allOpts.filter(o => o.date !== currentDate).forEach(o => {
-      const btn = document.createElement("button");
-      btn.className = "cap-pick-btn";
-      btn.textContent = o.label;
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        $("cap-due-chip").textContent = o.label;
-        $("cap-due-chip").dataset.date = o.date;
-        qp.remove();
-      });
-      qp.appendChild(btn);
-    });
-    // Date input: only show when current isn't already a custom date
-    // (avoids 3-item overflow; custom→Today/Tomorrow→tap again to get picker)
-    if (!isCustom) {
-      const dateInput = document.createElement("input");
-      dateInput.type = "date";
-      dateInput.className = "cap-pick-date";
-      dateInput.value = currentDate || todayDate;
-      dateInput.addEventListener("change", (e) => {
-        const val = e.target.value;
-        $("cap-due-chip").textContent = fmtDueChip(val);
-        $("cap-due-chip").dataset.date = val;
-        qp.remove();
-      });
-      qp.appendChild(dateInput);
-    }
-    $("cap-meta").appendChild(qp);
+  // v62: chips ARE native pickers — a transparent date/time input covers
+  // each chip, so one tap opens iOS's own picker. Clearing the value (the
+  // picker's Reset/backspace) returns to "No date"/"No time".
+  $("cap-due-input").addEventListener("change", (e) => {
+    const val = e.target.value;
+    $("cap-due-chip").dataset.date = val;
+    $("cap-due-txt").textContent = val ? fmtDueChip(val) : "No date";
   });
-  $("cap-time-chip").addEventListener("click", () => {
-    let tp = $("cap-time-pick");
-    if (tp) { tp.remove(); return; }
-    const dp = $("cap-quick-pick");
-    if (dp) dp.remove();
-    tp = document.createElement("div");
-    tp.id = "cap-time-pick";
-    tp.className = "cap-quick-pick";
-    const noTimeBtn = document.createElement("button");
-    noTimeBtn.className = "cap-pick-btn";
-    noTimeBtn.textContent = "No time";
-    noTimeBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      $("cap-time-chip").dataset.time = "";
-      $("cap-time-chip").textContent = "No time";
-      tp.remove();
-    });
-    const timeInput = document.createElement("input");
-    timeInput.type = "time";
-    timeInput.className = "cap-pick-date";
-    timeInput.value = $("cap-time-chip").dataset.time || "";
-    timeInput.addEventListener("change", (e) => {
-      const val = e.target.value;
-      $("cap-time-chip").dataset.time = val;
-      $("cap-time-chip").textContent = fmtTimeChip(val);
-      tp.remove();
-    });
-    tp.append(noTimeBtn, timeInput);
-    $("cap-meta").appendChild(tp);
+  $("cap-time-input").addEventListener("change", (e) => {
+    const val = e.target.value;
+    $("cap-time-chip").dataset.time = val;
+    $("cap-time-txt").textContent = val ? fmtTimeChip(val) : "No time";
   });
 
   document.addEventListener("visibilitychange", () => {

@@ -37,8 +37,9 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
 /* Header */
 .btn-settings { border: 0; background: none; color: var(--ink); font-size: 1.3rem;
   cursor: pointer; padding: 4px; line-height: 1; display: flex; align-items: center; }
-header { display: flex; justify-content: space-between; align-items: center;
+header { display: flex; justify-content: space-between; align-items: flex-start;
   padding: max(env(safe-area-inset-top), 12px) 16px 8px; }
+header .btn-settings { margin-top: 1px; } /* v62: optically aligned with the date */
 .hdr-date { font-size: 1.15rem; font-weight: 700; }
 .btn-icon { border: 0; background: var(--card); color: var(--ink); font-size: 1.1rem;
   border-radius: 50%; width: 38px; height: 38px; cursor: pointer;
@@ -139,7 +140,6 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 /* v53: end-of-list marker + section affordances */
 .list-end { text-align: center; color: var(--muted); opacity: 0.6; font-size: 0.75rem;
   padding: 18px 0 6px; }
-.sec-edit-hint { margin-left: 6px; opacity: 0.4; font-size: 0.9em; }
 .add-section-btn { color: var(--muted); font-size: 0.82rem; font-weight: 600;
   padding: 12px 2px 2px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .task-row { display: flex; align-items: center; gap: 12px; background: var(--card);
@@ -174,17 +174,23 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-list.trip .task-row.qty-zero { display: none; }
 .task-list.trip .task-row { padding: 17px 14px; }
 .task-list.trip .task-label { font-size: 1.05rem; }
-.trip-toggle { padding: 2px 2px 8px; }
+/* v62: layered trip chip on the active store pill */
+.pill-group { display: inline-flex; flex-shrink: 0; }
+.pill-group .lists-project-btn { border-radius: 20px 0 0 20px; }
+.pill-trip { border: 0; outline: none; -webkit-appearance: none; flex-shrink: 0;
+  border-radius: 0 20px 20px 0; padding: 6px 12px; margin-left: 1px;
+  background: var(--card); color: var(--muted); cursor: pointer; font-size: 1rem;
+  display: inline-flex; align-items: center; -webkit-tap-highlight-color: transparent; }
+.pill-trip.on { background: var(--accent); color: var(--accent-ink); }
 .qty-stepper .qty-num:empty { display: none; }
 .task-row.qty-zero .qty-num { color: var(--muted); opacity: 0.7; }
 .pill-count { margin-left: 6px; font-size: 0.72rem; font-weight: 700; opacity: 0.75;
   font-variant-numeric: tabular-nums; }
-.meal-card { display: flex; align-items: center; gap: 10px; background: var(--brief-bg);
-  border: 1px solid var(--brief-line); border-radius: 12px; padding: 10px 12px;
-  font-size: 0.9rem; font-weight: 600; color: var(--ink); flex-shrink: 0; }
-.meal-ico { font-size: 1.05rem; }
+/* v62: meal card uses event-row structure so its text aligns with titles */
+.meal-card { background: var(--brief-bg); border-color: var(--brief-line); flex-shrink: 0; }
+.meal-card .time { color: var(--ink); }
 .meal-label { color: var(--muted); font-weight: 700; font-size: 0.72rem;
-  text-transform: uppercase; letter-spacing: 0.05em; margin-right: 6px; }
+  text-transform: uppercase; letter-spacing: 0.05em; margin-right: 8px; }
 .event.ongoing { border-left: 3px solid var(--accent); }
 .event.ongoing .time { color: var(--accent); font-weight: 600; }
 .event.linked { cursor: pointer; }
@@ -199,13 +205,14 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
    keeps the red delete layer hidden underneath. */
 .task-done > * { opacity: 0.45; }
 .list-section-head { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.05em; color: var(--muted); padding: 14px 2px 2px; }
+  letter-spacing: 0.05em; color: var(--muted); padding: 14px 2px 6px;
+  position: sticky; top: -1px; background: var(--bg); z-index: 5; } /* v62: sticky on scroll */
 .task-list .list-section-head:first-child { padding-top: 4px; }
 .assignee-chip { flex-shrink: 0; margin-left: auto; width: 24px; height: 24px;
   border-radius: 50%; background: var(--brief-bg); border: 1px solid var(--brief-line);
   color: var(--accent); font-size: 0.72rem; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center; }
-.task-flame { margin-right: 5px; font-size: 0.85em; }
+.te-locs { flex-wrap: wrap; row-gap: 8px; } /* v62: many locations */
 
 /* v50/v51: item edit sheet, section rename, store badges */
 .te-locs { display: flex; gap: 8px; }
@@ -356,7 +363,10 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   border-radius: 20px; font-size: 0.82rem; font-family: inherit;
   box-sizing: border-box; white-space: nowrap; }
 .cap-due-chip { border: 1px solid var(--accent); background: transparent;
-  color: var(--accent); font-weight: 600; cursor: pointer; }
+  color: var(--accent); font-weight: 600; cursor: pointer;
+  position: relative; } /* v62: hosts the invisible native picker */
+.chip-native { position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; border: 0; padding: 0; -webkit-appearance: none; appearance: none; }
 .cap-quick-pick { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
 .cap-pick-btn { border: 1px solid var(--line); background: var(--card); color: var(--ink);
   cursor: pointer; }

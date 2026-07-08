@@ -35,7 +35,7 @@
     <header>
       <div>
         <div id="hdr-date" class="hdr-date"></div>
-        <span class="build-ver">v61</span>
+        <span class="build-ver">v62</span>
               </div>
       <button id="btn-settings" class="btn-settings" title="Settings"><i class="ti ti-settings"></i></button>
     </header>
@@ -74,8 +74,14 @@
         <button id="cap-submit" class="cap-submit" aria-label="Submit"><i class="ti ti-arrow-up"></i></button>
       </div>
       <div id="cap-meta" class="cap-meta">
-        <button id="cap-due-chip" class="cap-due-chip" data-date="" hidden></button>
-        <button id="cap-time-chip" class="cap-due-chip" data-time="" hidden>No time</button>
+        <div id="cap-due-chip" class="cap-due-chip" data-date="" hidden>
+          <span id="cap-due-txt"></span>
+          <input type="date" id="cap-due-input" class="chip-native" aria-label="Due date">
+        </div>
+        <div id="cap-time-chip" class="cap-due-chip" data-time="" hidden>
+          <span id="cap-time-txt">No time</span>
+          <input type="time" id="cap-time-input" class="chip-native" aria-label="Time">
+        </div>
       </div>
     </div>
 
