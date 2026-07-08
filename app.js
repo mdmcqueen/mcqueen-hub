@@ -112,6 +112,12 @@ async function gapiFetch(url) {
 }
 async function boot() {
   await restoreSettingsFromDriveIfEmpty();
+  // v58: relaunch lands where you were — with cached lists this paints the
+  // grocery list instantly even before any network call resolves.
+  const savedTab = localStorage.getItem("hub.activeTab");
+  if (savedTab && savedTab !== "today" && savedTab !== state.activeTab) {
+    switchTab(savedTab);
+  }
   try {
     const data = await gapiFetch("https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250");
     state.cals = (data.items || []).filter((c) => c.selected !== false || c.primary);
@@ -233,6 +239,7 @@ function buildProjectBar() {
       localStorage.setItem("hub.activeList", p.id);
       buildProjectBar();
       loadTasks();
+      updateWakeLock(); // v58: lock follows the active list
     };
     bar.appendChild(btn);
   });
@@ -355,71 +362,93 @@ function listEndMarker() {
   return end;
 }
 
+/* v58: render body extracted so cached data (instant paint on relaunch) and
+   fresh network data share one code path. */
+function renderListData(el, data) {
+  const { tasks, sections, doneItems, inventory } = data;
+  // v56: inventory items stay readable when checked — the checkmark means
+  // "stocked at home," not "done with this forever."
+  el.classList.toggle("inventory", !!inventory);
+  pruneCompletedRecently();
+  const openIds = new Set(tasks.map(t => t.id));
+  const doneIds = new Set(doneItems.map(c => c.id));
+  const doneExtras = [...state.completedRecently.values()]
+    .filter(e => e.kind === "list" && e.data.projectId === state.activeListId)
+    .map(e => e.data.task)
+    .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
+  const frag = document.createDocumentFragment();
+  const hasContent = (tasks && tasks.length > 0) || doneItems.length > 0 || doneExtras.length > 0;
+  if (!hasContent && (!sections || sections.length === 0)) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Nothing here yet.";
+    frag.appendChild(empty);
+    frag.appendChild(buildAddSectionControl());
+    el.replaceChildren(frag);
+    return;
+  }
+  tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
+  const secOf = (t) => t.sectionId || t.section_id || null;
+  const renderGroup = (secId) => {
+    tasks.filter(t => secOf(t) === secId).forEach(t => frag.appendChild(buildTaskRow(t)));
+    doneItems.filter(c => (c.sectionId || null) === secId).forEach(c => frag.appendChild(buildTaskRow(c, true)));
+  };
+  // Tasks with no section come first (matches Todoist's own layout)
+  renderGroup(null);
+  const secOrd = (s) => s.sectionOrder ?? s.section_order ?? s.order ?? 0;
+  sections.slice().sort((a, b) => secOrd(a) - secOrd(b)).forEach(s => {
+    const head = document.createElement("div");
+    head.className = "list-section-head";
+    head.dataset.sectionId = s.id; // drag-drop target (v49)
+    setSectionHeadContent(head, s.name);
+    head.addEventListener("click", () => beginSectionRename(head, s)); // v50
+    frag.appendChild(head);
+    renderGroup(s.id);
+  });
+  doneExtras.forEach(t => frag.appendChild(buildTaskRow(t, true)));
+  frag.appendChild(buildAddSectionControl());
+  frag.appendChild(listEndMarker());
+  el.replaceChildren(frag);
+}
+
+const listCacheKey = (id) => "hub.listCache." + id;
+function readListCache(id) {
+  try { return JSON.parse(localStorage.getItem(listCacheKey(id)) || "null"); }
+  catch (_) { return null; }
+}
+function writeListCache(id, data) {
+  try { localStorage.setItem(listCacheKey(id), JSON.stringify(data)); } catch (_) {}
+}
+
 async function loadTasks() {
   const ctx = groceryContext();
   if (ctx && ctx.pantry && state.activeListId === ctx.pantry.id) return renderPantryLens(ctx);
   const el = $("lists-tasks");
   // v53: only show a loading state on first load / list switch — refreshes
   // render off-DOM and swap in atomically, so no clear-and-flash.
+  // v58: on switch/relaunch, paint the cached copy instantly, then refresh.
   const switching = state._lastList !== state.activeListId;
   state._lastList = state.activeListId;
+  const inventory = isInventoryList(state.activeListId);
   if (switching || !el.hasChildNodes()) {
-    el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+    const cached = readListCache(state.activeListId);
+    if (cached && cached.tasks) renderListData(el, { ...cached, inventory });
+    else el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   }
   try {
-    const inventory = isInventoryList(state.activeListId);
-    // v56: inventory items stay readable when checked — the checkmark means
-    // "stocked at home," not "done with this forever."
-    el.classList.toggle("inventory", inventory);
     const [tasks, sections, completed] = await Promise.all([
       todoistFetchAll("/tasks?project_id=" + state.activeListId),
       todoistFetchAll("/sections?project_id=" + state.activeListId).catch(() => []),
       inventory ? fetchCompletedItems(state.activeListId) : Promise.resolve([]),
       ensureCollaborators(state.activeListId),
     ]);
-    pruneCompletedRecently();
     const openIds = new Set(tasks.map(t => t.id));
     const doneItems = (completed || []).filter(c => c.id && !openIds.has(c.id));
-    const doneIds = new Set(doneItems.map(c => c.id));
-    const doneExtras = [...state.completedRecently.values()]
-      .filter(e => e.kind === "list" && e.data.projectId === state.activeListId)
-      .map(e => e.data.task)
-      .filter(t => !openIds.has(t.id) && !doneIds.has(t.id));
-    const frag = document.createDocumentFragment();
-    const hasContent = (tasks && tasks.length > 0) || doneItems.length > 0 || doneExtras.length > 0;
-    if (!hasContent && (!sections || sections.length === 0)) {
-      const empty = document.createElement("div");
-      empty.className = "empty";
-      empty.textContent = "Nothing here yet.";
-      frag.appendChild(empty);
-      frag.appendChild(buildAddSectionControl());
-      el.replaceChildren(frag);
-      return;
-    }
-    tasks.sort((a, b) => (a.childOrder ?? a.child_order ?? a.order ?? 0) - (b.childOrder ?? b.child_order ?? b.order ?? 0));
-    const secOf = (t) => t.sectionId || t.section_id || null;
-    const renderGroup = (secId) => {
-      tasks.filter(t => secOf(t) === secId).forEach(t => frag.appendChild(buildTaskRow(t)));
-      doneItems.filter(c => (c.sectionId || null) === secId).forEach(c => frag.appendChild(buildTaskRow(c, true)));
-    };
-    // Tasks with no section come first (matches Todoist's own layout)
-    renderGroup(null);
-    const secOrd = (s) => s.sectionOrder ?? s.section_order ?? s.order ?? 0;
-    sections.slice().sort((a, b) => secOrd(a) - secOrd(b)).forEach(s => {
-      const head = document.createElement("div");
-      head.className = "list-section-head";
-      head.dataset.sectionId = s.id; // drag-drop target (v49)
-      setSectionHeadContent(head, s.name);
-      head.addEventListener("click", () => beginSectionRename(head, s)); // v50
-      frag.appendChild(head);
-      renderGroup(s.id);
-    });
-    doneExtras.forEach(t => frag.appendChild(buildTaskRow(t, true)));
-    frag.appendChild(buildAddSectionControl());
-    frag.appendChild(listEndMarker());
-    el.replaceChildren(frag);
+    const data = { tasks, sections, doneItems, inventory };
+    writeListCache(state.activeListId, { tasks, sections, doneItems });
+    renderListData(el, data);
   } catch (e) {
-    if (switching || !el.querySelector(".task-row")) {
+    if (!el.querySelector(".task-row")) {
       el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
     } else {
       toast("Couldn't refresh — showing last loaded");
@@ -428,13 +457,42 @@ async function loadTasks() {
 }
 
 /* ---------- Pantry lens (v51) ---------- */
+function renderPantryData(el, perStore) {
+  const frag = document.createDocumentFragment();
+  const total = perStore.reduce((n, r) => n + r.open.length + r.done.length, 0);
+  if (total === 0) {
+    el.innerHTML = `<div class="empty">No items in the store lists yet.</div>`; return;
+  }
+  const badge = (name) => name.split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
+  const locOf = (t) => homeLocOf(t) || "Unsorted";
+  HOME_LOCS.concat(["Unsorted"]).forEach(loc => {
+    const rows = [];
+    perStore.forEach(({ store, open, done }) => {
+      open.filter(t => locOf(t) === loc).forEach(t =>
+        rows.push(buildTaskRow(t, false, { noDrag: true, storeBadge: badge(store.name) })));
+      done.filter(c => locOf(c) === loc).forEach(c =>
+        rows.push(buildTaskRow(c, true, { noDrag: true, storeBadge: badge(store.name) })));
+    });
+    if (!rows.length) return;
+    const head = document.createElement("div");
+    head.className = "list-section-head";
+    head.textContent = loc;
+    frag.appendChild(head);
+    rows.forEach(r => frag.appendChild(r));
+  });
+  frag.appendChild(listEndMarker());
+  el.replaceChildren(frag);
+}
+
 async function renderPantryLens(ctx) {
   const el = $("lists-tasks");
   el.classList.add("inventory"); // v56: readable checked items
   const switching = state._lastList !== state.activeListId;
   state._lastList = state.activeListId;
   if (switching || !el.hasChildNodes()) {
-    el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
+    const cached = readListCache(ctx.pantry.id);
+    if (cached && cached.perStore) renderPantryData(el, cached.perStore); // v58 instant paint
+    else el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   }
   try {
     const perStore = await Promise.all(ctx.stores.map(async (s) => {
@@ -447,32 +505,10 @@ async function renderPantryLens(ctx) {
         return { store: s, open, done: done.filter(c => c.id && !openIds.has(c.id)) };
       } catch (_) { return { store: s, open: [], done: [] }; }
     }));
-    const frag = document.createDocumentFragment();
-    const total = perStore.reduce((n, r) => n + r.open.length + r.done.length, 0);
-    if (total === 0) {
-      el.innerHTML = `<div class="empty">No items in the store lists yet.</div>`; return;
-    }
-    const badge = (name) => name.split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
-    const locOf = (t) => homeLocOf(t) || "Unsorted";
-    HOME_LOCS.concat(["Unsorted"]).forEach(loc => {
-      const rows = [];
-      perStore.forEach(({ store, open, done }) => {
-        open.filter(t => locOf(t) === loc).forEach(t =>
-          rows.push(buildTaskRow(t, false, { noDrag: true, storeBadge: badge(store.name) })));
-        done.filter(c => locOf(c) === loc).forEach(c =>
-          rows.push(buildTaskRow(c, true, { noDrag: true, storeBadge: badge(store.name) })));
-      });
-      if (!rows.length) return;
-      const head = document.createElement("div");
-      head.className = "list-section-head";
-      head.textContent = loc;
-      frag.appendChild(head);
-      rows.forEach(r => frag.appendChild(r));
-    });
-    frag.appendChild(listEndMarker());
-    el.replaceChildren(frag);
+    writeListCache(ctx.pantry.id, { perStore });
+    renderPantryData(el, perStore);
   } catch (e) {
-    if (switching || !el.querySelector(".task-row")) {
+    if (!el.querySelector(".task-row")) {
       el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
     } else {
       toast("Couldn't refresh — showing last loaded");
@@ -2069,9 +2105,30 @@ function wirePullToRefresh() {
   });
 }
 
+/* ---------- screen wake lock (v58) ----------
+   While a grocery/inventory list is on screen, keep the display awake —
+   no more phone sleeping mid-aisle. Released when leaving the list or
+   backgrounding; re-acquired on return (iOS releases locks on hide). */
+let _wakeLock = null;
+async function updateWakeLock() {
+  const want = state.activeTab === "lists" &&
+    isInventoryList(state.activeListId) &&
+    document.visibilityState === "visible";
+  try {
+    if (want && !_wakeLock && "wakeLock" in navigator) {
+      _wakeLock = await navigator.wakeLock.request("screen");
+      _wakeLock.addEventListener("release", () => { _wakeLock = null; });
+    } else if (!want && _wakeLock) {
+      const wl = _wakeLock; _wakeLock = null;
+      await wl.release();
+    }
+  } catch (_) { _wakeLock = null; } // unsupported/denied — degrade silently
+}
+
 /* ---------- tab switching ---------- */
 function switchTab(tab) {
   state.activeTab = tab;
+  localStorage.setItem("hub.activeTab", tab); // v58: relaunch restores this
   ["today", "week", "lists"].forEach(t => {
     const mainEl = $("tab-" + t);
     const btnEl = $("tb-" + t);
@@ -2079,6 +2136,7 @@ function switchTab(tab) {
     if (btnEl) btnEl.classList.toggle("active", t === tab);
   });
   if (tab === "lists") renderLists();
+  updateWakeLock();
   if (state.fabOpen) buildFabFlyout(); // refresh contextual options
 }
 
@@ -2195,6 +2253,7 @@ function wireUI() {
   });
 
   document.addEventListener("visibilitychange", () => {
+    updateWakeLock(); // v58: re-acquire on return, release on hide
     if (!document.hidden && localStorage.getItem("hub.authed") === "1" && ensureToken()) refreshAll();
   });
 
