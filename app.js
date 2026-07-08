@@ -1270,8 +1270,12 @@ async function addTodoistTask(content, projectId, due) {
   // Sending both casings is a harmless, version-proof fix.
   if (projectId) { body.projectId = projectId; body.project_id = projectId; }
   if (due) {
+    // v63: send due_date whenever we know it, even alongside due_datetime.
+    // Without it, Todoist can derive due.date from due_datetime's UTC day,
+    // which rolls to tomorrow for any evening Pacific time (7pm PT = 2am
+    // UTC) — the task then silently never matches the Today filter.
+    if (due.date) { body.dueDate = due.date; body.due_date = due.date; }
     if (due.datetime) { body.dueDatetime = due.datetime; body.due_datetime = due.datetime; }
-    else if (due.date) { body.dueDate = due.date; body.due_date = due.date; }
     else if (due.string) { body.dueString = due.string; body.due_string = due.string; }
   }
   await todoistFetch("/tasks", "POST", body);
@@ -1766,6 +1770,7 @@ function closeFab() {
   $("tb-add").classList.remove("open");
   $("fab-backdrop").classList.remove("open");
   $("cap-sheet").hidden = true;
+  unpinCapSheet();
   const qp = $("cap-quick-pick");
   if (qp) qp.hidden = true;
 }
@@ -1814,6 +1819,28 @@ function handleCapture(label) {
 }
 
 /* ---------- capture sheet ---------- */
+// v63: on iOS, a position:fixed bottom sheet doesn't reposition when the
+// keyboard opens — it stays anchored to the full layout viewport while the
+// *visual* viewport shrinks, so the sheet (and the blinking caret inside
+// #cap-input) ends up rendered lower than the keyboard's actual top edge,
+// reading as "the cursor shows up below the field." Track the visual
+// viewport and translate the sheet up by exactly the keyboard's height.
+function pinCapSheet() {
+  const vv = window.visualViewport;
+  const sheet = $("cap-sheet");
+  if (!vv || !sheet || sheet.hidden) return;
+  const kbInset = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+  sheet.style.transform = kbInset > 1 ? `translateY(-${kbInset}px)` : "";
+}
+function unpinCapSheet() {
+  const sheet = $("cap-sheet");
+  if (sheet) sheet.style.transform = "";
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", pinCapSheet);
+  window.visualViewport.addEventListener("scroll", pinCapSheet);
+}
+
 function openCapSheet(type, placeholder, projectId, dueDate) {
   const sheet = $("cap-sheet");
   const input = $("cap-input");
@@ -1845,7 +1872,7 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
   }
 
   sheet.hidden = false;
-  setTimeout(() => input.focus(), 80);
+  setTimeout(() => { input.focus(); pinCapSheet(); setTimeout(pinCapSheet, 350); }, 80);
 }
 
 function fmtDueChip(isoDate) {
@@ -1877,8 +1904,9 @@ async function submitCapSheet() {
   const type = sheet.dataset.type;
   const projectId = sheet.dataset.project || null;
   const value = input.value.trim();
-  if (!value) { sheet.hidden = true; return; }
+  if (!value) { sheet.hidden = true; unpinCapSheet(); return; }
   sheet.hidden = true;
+  unpinCapSheet();
 
   const chipDate = $("cap-due-chip").dataset.date || "";
   const chipTime = $("cap-time-chip").dataset.time || "";
@@ -1899,7 +1927,10 @@ async function submitCapSheet() {
       renderLists();
     } else {
       let due = null;
-      if (chipDate && chipTime) due = { datetime: localToUTCISO(chipDate, chipTime) };
+      // v63: lock the explicit local calendar date alongside the UTC instant
+      // (see addTodoistTask) — this is the actual fix for "timed tasks added
+      // for Today don't show up."
+      if (chipDate && chipTime) due = { date: chipDate, datetime: localToUTCISO(chipDate, chipTime) };
       else if (chipDate) due = { date: chipDate };
       else if (type === "reminder") due = { string: "today" };
       if (type === "task" && !chipDate && !chipTime) {
