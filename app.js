@@ -294,6 +294,17 @@ function syncPillbarHeight() {
 }
 window.addEventListener("resize", syncPillbarHeight);
 
+// v70: same idea as syncPillbarHeight() but for .week-nav, which is now the
+// single sticky/safe-area-absorbing bar for the Week tab (see styles.css) —
+// .day-head sticks directly under it via var(--weeknav-h).
+function syncWeeknavHeight() {
+  const nav = document.querySelector(".week-nav");
+  if (!nav) return;
+  const h = nav.getBoundingClientRect().height;
+  if (h > 0) document.documentElement.style.setProperty("--weeknav-h", h + "px");
+}
+window.addEventListener("resize", syncWeeknavHeight);
+
 /* Grocery family detection (v51). The project named "Groceries" (top level)
    and its children are treated specially:
    - store lists (Whole Foods, Costco) and Pantry are INVENTORY lists —
@@ -1855,16 +1866,34 @@ async function renderWeek() {
     }
     wk.append(g);
   }
+  syncWeeknavHeight(); // v70: keep sticky day-heads flush under .week-nav
 }
-// v69: scrolls so today's sticky day-head lands exactly at the top of the
-// viewport (where it's about to stick anyway) — a no-op if the currently
-// displayed week doesn't include today (weekOffset != 0, or today's group
-// simply isn't in the DOM yet on a slow first load).
+// v70: scrolls so today's sticky day-head lands exactly where it's about to
+// stick (right under .week-nav) — a no-op if the currently displayed week
+// doesn't include today (weekOffset != 0, or today's group simply isn't in
+// the DOM yet on a slow first load).
+// v69 used head.scrollIntoView({block:"start"}), which fired synchronously
+// right after unhiding the Week tab/rebuilding its DOM — before the browser
+// had settled layout for the newly-visible sticky elements, so it silently
+// no-op'd. Deferring one frame (rAF) lets layout catch up, and computing the
+// scroll delta manually from getBoundingClientRect (rather than trusting
+// scrollIntoView's own handling of sticky offsets) sidesteps cross-engine
+// inconsistency in how sticky position interacts with scrollIntoView.
 function scrollWeekToToday() {
   if (state.weekOffset !== 0) return;
-  const g = document.querySelector('#week-list .day-group[data-date="' + todayISO() + '"]');
-  const head = g && g.querySelector(".day-head");
-  if (head) head.scrollIntoView({ block: "start" });
+  requestAnimationFrame(() => {
+    syncWeeknavHeight();
+    const g = document.querySelector('#week-list .day-group[data-date="' + todayISO() + '"]');
+    const head = g && g.querySelector(".day-head");
+    if (!head) return;
+    const nav = document.querySelector(".week-nav");
+    const navH = nav ? nav.getBoundingClientRect().height : 0;
+    const delta = head.getBoundingClientRect().top - navH;
+    if (Math.abs(delta) > 1) {
+      const cur = window.scrollY || document.documentElement.scrollTop || 0;
+      window.scrollTo({ top: Math.max(0, cur + delta), behavior: "auto" });
+    }
+  });
 }
 
 function fillList(el, items, emptyMsg) {

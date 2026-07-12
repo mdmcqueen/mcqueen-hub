@@ -70,26 +70,32 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .empty { color: var(--muted); font-size: 0.9rem; padding: 12px 2px; }
 
 .day-group { margin-bottom: 14px; }
-/* v69: sticky per-day header for the Week tab, matching the Lists tab's
-   sticky section heads. top:0 + padding-top absorbing the safe-area inset
-   (rather than top:env(safe-area-inset-top) with no padding) means the
-   header's own opaque background seals the notch/Dynamic Island strip
-   instead of leaving it transparent for scrolled content to show through —
-   same fix as .lists-project-bar. scrollWeekToToday() scrolls today's
-   header to this exact position when the Week tab is opened. */
-.day-group .day-head { position: sticky; top: 0; z-index: 5; background: var(--bg);
-  font-size: 0.85rem; font-weight: 700; margin: 0;
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) 0 6px;
-  color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+/* v70: v69 gave every .day-head its own env(safe-area-inset-top) padding,
+   copying the .lists-project-bar fix — but that bar exists ONCE, while
+   .day-head repeats 7x, and a sticky box reserves its full padded height
+   in normal flow even while NOT stuck. That put ~50-70px of dead space
+   above every single day, not just the one currently pinned to the top —
+   the "extra space between days" regression. Fix: .week-nav (below) is now
+   the single sticky element that absorbs the safe-area inset once, exactly
+   like .lists-project-bar does for the Lists tab. .day-head just needs to
+   stack directly under it (var(--weeknav-h), measured in JS) with normal,
+   small padding — no safe-area math here anymore. */
+.day-group .day-head { position: sticky; top: var(--weeknav-h, 54px); z-index: 5;
+  background: var(--bg); font-size: 0.85rem; font-weight: 700; margin: 0;
+  padding: 8px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
 .day-group.past { opacity: 0.55; }
 
 /* Pull-to-refresh */
 .ptr { height: 0; overflow: hidden; text-align: center; color: var(--muted);
   font-size: 0.8rem; line-height: 40px; transition: height 0.12s; }
 
-/* Week nav */
+/* Week nav — v70: sticky + bleeds to the screen edges + absorbs the
+   safe-area inset once (top:0 + padding-top, same pattern as
+   .lists-project-bar), so it seals the notch/Dynamic Island strip and
+   .day-head no longer has to. */
 .week-nav { display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin: 6px 0 10px; }
+  gap: 8px; position: sticky; top: 0; z-index: 6; background: var(--bg);
+  margin: 0 -16px 10px; padding: calc(env(safe-area-inset-top, 0px) + 6px) 16px 8px; }
 .week-label-btn { flex: 1; border: 1px solid var(--line); background: var(--card);
   color: var(--ink); font-size: 0.95rem; font-weight: 700; padding: 8px 0;
   border-radius: 10px; cursor: pointer; }
