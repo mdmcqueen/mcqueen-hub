@@ -406,6 +406,58 @@ function listEndMarker() {
   return end;
 }
 
+// v65: replaces the plain end-of-list marker while trip mode is active.
+// Checks what's still visible (open + qty >= 1 — exactly what trip mode
+// itself keeps on screen) rather than re-deriving that from task data, so
+// it can never disagree with what the shopper is actually looking at.
+function tripDoneButton() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "trip-done-btn";
+  btn.textContent = "I'm done shopping";
+  btn.addEventListener("click", handleTripDone);
+  return btn;
+}
+function remainingTripItems() {
+  return Array.from($("lists-tasks").querySelectorAll(".task-row"))
+    .filter(r => !r.classList.contains("task-done") && !r.classList.contains("qty-zero"))
+    .map(r => r.querySelector(".task-label")?.textContent || "")
+    .filter(Boolean);
+}
+function handleTripDone() {
+  const remaining = remainingTripItems();
+  if (remaining.length) { showTripSummary(remaining); return; }
+  toast("Nice — everything's checked off");
+  localStorage.setItem("hub.tripMode", "0");
+  $("lists-tasks").classList.remove("trip");
+  buildProjectBar();
+  loadTasks();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function showTripSummary(names) {
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  const card = document.createElement("div");
+  card.className = "modal-card";
+  card.innerHTML = `<div class="modal-head"><strong>Still need ${names.length} ${names.length === 1 ? "item" : "items"}</strong><button class="btn-icon" id="trip-modal-close">✕</button></div>
+    <div class="trip-remaining-list" id="trip-remaining-list"></div>
+    <div class="settings-token-actions" style="margin-top:16px"><button id="trip-modal-continue" class="settings-btn-primary">Keep shopping</button></div>`;
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+  const list = card.querySelector("#trip-remaining-list");
+  names.forEach(n => {
+    const row = document.createElement("div");
+    row.className = "trip-remaining-row";
+    row.textContent = n;
+    list.appendChild(row);
+  });
+  lockBodyScroll();
+  const close = () => { modal.remove(); unlockBodyScroll(); };
+  card.querySelector("#trip-modal-close").onclick = close;
+  card.querySelector("#trip-modal-continue").onclick = close;
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+}
+
 /* v58: render body extracted so cached data (instant paint on relaunch) and
    fresh network data share one code path. */
 function renderListData(el, data) {
@@ -461,7 +513,8 @@ function renderListData(el, data) {
   });
   doneExtras.forEach(t => frag.appendChild(buildTaskRow(t, true)));
   frag.appendChild(buildAddSectionControl());
-  frag.appendChild(listEndMarker());
+  // v65: swap in the "I'm done shopping" control while trip mode is active
+  frag.appendChild((inventory && tripOn()) ? tripDoneButton() : listEndMarker());
   el.replaceChildren(frag);
 }
 
@@ -715,15 +768,20 @@ function buildTaskRow(task, isDone, opts) {
   // v62: checked items are draggable too on inventory lists (manual order)
   const draggable = !opts.noDrag && (!isDone || isInventoryList(state.activeListId));
   if (draggable) attachDrag(row, task);
-  // v50: tap the card (not the checkbox) to edit title + home location
-  if (!isDone) {
-    row.addEventListener("click", (e) => {
-      if (e.target.closest(".task-cb")) return;
-      if (Date.now() < (drag.suppressClickUntil || 0)) return;
-      if (Date.now() < (swipe.suppressClickUntil || 0)) return;
-      openTaskEdit(task, row);
-    });
-  }
+  // v50: tap the card (not the checkbox) to edit title + home location.
+  // v65: available on done rows too — inventory items stay visible once
+  // checked, and there was previously no way to rename/relocate them once
+  // ticked off. The whole left "checkbox gutter" (button + its surrounding
+  // padding) is excluded by X-position, not just the button's own hit box,
+  // so a tap that lands just beside the checkbox still toggles it instead
+  // of opening edit.
+  row.addEventListener("click", (e) => {
+    if (e.target.closest(".task-cb")) return;
+    if (e.clientX - row.getBoundingClientRect().left < 46) return;
+    if (Date.now() < (drag.suppressClickUntil || 0)) return;
+    if (Date.now() < (swipe.suppressClickUntil || 0)) return;
+    openTaskEdit(task, row);
+  });
   const cb = document.createElement("button");
   cb.className = "task-cb";
   cb.type = "button";
@@ -920,6 +978,20 @@ function beginSectionRename(head, s) {
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
 }
 
+// v65: collapse-and-remove a checked-off row's wrapper instead of the CSS
+// rule snapping it away instantly (see the trip-mode "leaving" rule in
+// styles.css). Also fixes the flex-gap-around-a-hidden-child bug at its
+// root, since the wrapper is genuinely removed from the DOM once this runs.
+function startLeaveAnimation(wrap) {
+  if (!wrap || !wrap.isConnected || wrap.classList.contains("leaving")) return;
+  wrap.style.maxHeight = wrap.getBoundingClientRect().height + "px";
+  requestAnimationFrame(() => {
+    wrap.classList.add("leaving");
+    wrap.style.maxHeight = "0px";
+  });
+  setTimeout(() => { if (wrap.isConnected) wrap.remove(); }, 340);
+}
+
 async function completeTask(id, ctx) {
   const row = $("task-" + id);
   // Immediately show completed state — checkbox stays clickable so it can be undone
@@ -930,10 +1002,24 @@ async function completeTask(id, ctx) {
   }
   // Remember it briefly so it survives the next re-render instead of vanishing
   if (ctx) state.completedRecently.set(id, { ...ctx, expiresAt: Date.now() + 120000 });
+  // v65: in trip mode, give a beat before the row actually leaves — protects
+  // against an accidental checkbox tap mid-aisle and reads less abrupt than
+  // an instant disappearance. .pending-hide keeps the CSS auto-hide rule
+  // from snapping it away before the grace period is up.
+  const wrap = row ? wrapOf(row) : null;
+  if (wrap && ctx && ctx.kind === "list" && tripOn() && isInventoryList(ctx.data.projectId)) {
+    clearTimeout(wrap._tripHideTimer);
+    wrap.classList.add("pending-hide");
+    wrap._tripHideTimer = setTimeout(() => {
+      wrap.classList.remove("pending-hide");
+      startLeaveAnimation(wrap);
+    }, 2200);
+  }
   try {
     await todoistFetch("/tasks/" + id + "/close", "POST");
   } catch (e) {
     toast("Couldn't complete — try again");
+    if (wrap) { clearTimeout(wrap._tripHideTimer); wrap.classList.remove("pending-hide"); }
     if (row) {
       row.classList.remove("task-done");
       const cb = row.querySelector(".task-cb");
@@ -945,6 +1031,13 @@ async function completeTask(id, ctx) {
 
 async function uncompleteTask(id) {
   const row = $("task-" + id);
+  const wrap = row ? wrapOf(row) : null;
+  // v65: undoing within the grace period cancels the pending trip-mode hide
+  if (wrap) {
+    clearTimeout(wrap._tripHideTimer);
+    wrap.classList.remove("pending-hide");
+    if (wrap.classList.contains("leaving")) { wrap.classList.remove("leaving"); wrap.style.maxHeight = ""; }
+  }
   if (row) {
     row.classList.remove("task-done");
     const cb = row.querySelector(".task-cb");

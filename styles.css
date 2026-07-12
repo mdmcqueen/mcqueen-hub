@@ -113,9 +113,9 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
    top offset (below) is kept in sync with this bar's real height via
    --pillbar-h, measured in JS after every render. */
 .lists-project-bar { display: flex; gap: 8px; overflow-x: auto;
-  margin: 0 -16px; padding: 2px 16px 12px;
+  margin: 0 -16px; padding: calc(env(safe-area-inset-top, 0px) + 2px) 16px 12px;
   -webkit-overflow-scrolling: touch; scrollbar-width: none;
-  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 6; background: var(--bg); }
+  position: sticky; top: 0; z-index: 6; background: var(--bg); }
 .lists-project-bar::-webkit-scrollbar { display: none; }
 .lists-project-btn { flex-shrink: 0; padding: 6px 14px; border: 0; outline: none;
   -webkit-appearance: none; border-radius: 20px; background: var(--card); color: var(--muted);
@@ -174,10 +174,21 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .has-qty .store-badge, .has-qty .assignee-chip { margin-left: 6px; }
 
 /* v59: trip mode, pill counts, meal card, ongoing events */
-.task-list.trip .task-done { display: none; }
-.task-list.trip .task-row.qty-zero { display: none; }
+/* v65: hide the WRAPPER, not just the row inside it — a hidden .task-row
+   left its .swipe-wrap behind as an empty-but-present flex item, and
+   flexbox `gap` still inserts space around present items regardless of
+   their height. That's the "inconsistent gaps, fixed by moving an item"
+   bug (dragging rebuilds/reorders the DOM and incidentally hid the
+   zombie wrapper too). :not(.pending-hide) lets a just-checked-off row
+   stay visible during its grace period (see completeTask). */
+.task-list.trip .swipe-wrap:has(.task-done):not(.pending-hide) { display: none; }
+.task-list.trip .swipe-wrap:has(.task-row.qty-zero) { display: none; }
 .task-list.trip .task-row { padding: 17px 14px; }
 .task-list.trip .task-label { font-size: 1.05rem; }
+/* v65: collapse-and-fade before removal, instead of an instant snap, when
+   a checked-off row's grace period elapses in trip mode. */
+.swipe-wrap.leaving { transition: opacity 0.32s ease, max-height 0.32s ease, margin-bottom 0.32s ease;
+  opacity: 0; margin-bottom: 0; overflow: hidden; }
 /* v64: title chip fully rounded and on top; trip toggle now flows almost
    entirely under it at rest (just enough of a sliver stays clickable) and
    springs out on tap instead of resting half-exposed. Unselected =
@@ -224,7 +235,7 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-done > * { opacity: 0.45; }
 .list-section-head { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--muted); padding: 14px 2px 6px;
-  position: sticky; top: calc(env(safe-area-inset-top, 0px) + var(--pillbar-h, 46px)); background: var(--bg); z-index: 5; } /* v64: stacks directly under the sticky pill bar, chips first */
+  position: sticky; top: var(--pillbar-h, 46px); background: var(--bg); z-index: 5; } /* v65: pillbar-h now spans from the true top (see .lists-project-bar), so no separate safe-area add here */
 .task-list .list-section-head:first-child { padding-top: 4px; }
 .assignee-chip { flex-shrink: 0; margin-left: auto; width: 24px; height: 24px;
   border-radius: 50%; background: var(--brief-bg); border: 1px solid var(--brief-line);
@@ -262,6 +273,15 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-list.inventory .task-done > * { opacity: 1; }
 .lists-setup { padding: 20px 0; text-align: center; color: var(--muted); }
 .lists-setup .btn-primary { margin-top: 12px; width: auto; padding: 10px 24px; }
+/* v65: "I'm done shopping" replaces the plain end-of-list marker in trip
+   mode, plus the remaining-items summary it can open. */
+.trip-done-btn { display: block; width: 100%; margin: 12px 0 6px; padding: 14px; border: 0;
+  border-radius: 14px; background: var(--accent); color: var(--accent-ink); font-size: 0.95rem;
+  font-weight: 700; cursor: pointer; font-family: inherit; -webkit-tap-highlight-color: transparent; }
+.trip-remaining-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px;
+  max-height: 40vh; overflow-y: auto; }
+.trip-remaining-row { font-size: 0.92rem; color: var(--ink); padding: 9px 11px;
+  background: var(--bg); border-radius: 8px; }
 
 /* FAB backdrop + flyout */
 .fab-backdrop { position: fixed; inset: 0; bottom: calc(60px + var(--safe-bottom));
