@@ -189,19 +189,22 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
    a checked-off row's grace period elapses in trip mode. */
 .swipe-wrap.leaving { transition: opacity 0.32s ease, max-height 0.32s ease, margin-bottom 0.32s ease;
   opacity: 0; margin-bottom: 0; overflow: hidden; }
-/* v64: title chip fully rounded and on top; trip toggle now flows almost
-   entirely under it at rest (just enough of a sliver stays clickable) and
-   springs out on tap instead of resting half-exposed. Unselected =
-   complementary light blue (matches --brief-bg elsewhere); selected blue
-   unchanged. */
+/* v67: the trip chip only ever exists on the active (selected) store pill
+   to begin with (see buildProjectBar) — so it's fully absent for every
+   unselected pill, and fully deployed (full icon visible, not a peeking
+   sliver) whenever its parent pill IS selected. Position is now a FIXED
+   overlap in both states — only background/text color distinguish trip
+   mode on vs off, no more reveal/hide animation between them. The overlap
+   (20px, matching the border-radius) tucks the chip's left rounded corner
+   completely under the title chip; the extra 4px of left padding keeps
+   the icon itself clear of that overlap so nothing gets clipped. */
 .pill-group { position: relative; display: inline-flex; flex-shrink: 0; align-items: center; }
 .pill-group .lists-project-btn { position: relative; z-index: 2; border-radius: 20px; }
 .pill-trip { position: relative; z-index: 1; border: 0; outline: none; -webkit-appearance: none;
-  flex-shrink: 0; border-radius: 20px; padding: 6px 10px 6px 30px; margin-left: -34px;
+  flex-shrink: 0; border-radius: 20px; padding: 6px 14px 6px 24px; margin-left: -20px;
   background: var(--brief-bg); color: var(--accent); cursor: pointer; font-size: 1rem;
-  display: inline-flex; align-items: center; -webkit-tap-highlight-color: transparent;
-  transition: margin-left 0.4s cubic-bezier(0.34,1.56,0.64,1); }
-.pill-trip.on { background: var(--accent); color: var(--accent-ink); margin-left: -10px; }
+  display: inline-flex; align-items: center; -webkit-tap-highlight-color: transparent; }
+.pill-trip.on { background: var(--accent); color: var(--accent-ink); }
 /* v64: shared spring-bump feedback — store pills bump when they become the
    active one, the trip chip bumps whenever it's toggled. */
 .pill-bump { animation: pillBump 0.42s cubic-bezier(0.34,1.56,0.64,1); }
