@@ -84,6 +84,15 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
   background: var(--bg); font-size: 0.85rem; font-weight: 700; margin: 0;
   padding: 8px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
 .day-group.past { opacity: 0.55; }
+/* v71: flexible space after the last day so it can always reach the sticky
+   top position. Without this, scrollWeekToToday()'s target scroll position
+   for Sunday (the last of the 7 days) could exceed the page's actual max
+   scroll height whenever Sunday had few/no events following it — the
+   browser silently clamps scrollTo() to what's scrollable, which is why
+   "Sunday isn't auto scrolled" persisted even after v70's math fix. 100vh
+   guarantees at least a full screen of scroll room past the last entry,
+   regardless of device size, with no JS measurement needed. */
+.week-end-spacer { height: 100vh; }
 
 /* Pull-to-refresh */
 .ptr { height: 0; overflow: hidden; text-align: center; color: var(--muted);

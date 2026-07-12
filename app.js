@@ -1866,6 +1866,9 @@ async function renderWeek() {
     }
     wk.append(g);
   }
+  const spacer = document.createElement("div");
+  spacer.className = "week-end-spacer"; // v71: room for the last day to reach the top on auto-scroll
+  wk.append(spacer);
   syncWeeknavHeight(); // v70: keep sticky day-heads flush under .week-nav
 }
 // v70: scrolls so today's sticky day-head lands exactly where it's about to
