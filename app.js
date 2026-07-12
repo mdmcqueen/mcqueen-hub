@@ -154,6 +154,9 @@ async function refreshAll() {
   state.ranges = {};
   await renderToday();
   await renderWeek();
+  // v69: covers relaunching straight into the Week tab, where switchTab()
+  // already ran before this data existed to scroll to.
+  if (state.activeTab === "week") scrollWeekToToday();
 }
 
 /* ---------- todoist ---------- */
@@ -1839,6 +1842,7 @@ async function renderWeek() {
       return ta - tb;
     });
     const g = document.createElement("div");
+    g.dataset.date = dISO; // v69: lets scrollWeekToToday() find today's group
     g.className = "day-group" + (dISO < today ? " past" : "");
     const h = document.createElement("div"); h.className = "day-head";
     h.textContent = (dISO === today ? "Today · " : "") + labelFor(dISO);
@@ -1852,6 +1856,17 @@ async function renderWeek() {
     wk.append(g);
   }
 }
+// v69: scrolls so today's sticky day-head lands exactly at the top of the
+// viewport (where it's about to stick anyway) — a no-op if the currently
+// displayed week doesn't include today (weekOffset != 0, or today's group
+// simply isn't in the DOM yet on a slow first load).
+function scrollWeekToToday() {
+  if (state.weekOffset !== 0) return;
+  const g = document.querySelector('#week-list .day-group[data-date="' + todayISO() + '"]');
+  const head = g && g.querySelector(".day-head");
+  if (head) head.scrollIntoView({ block: "start" });
+}
+
 function fillList(el, items, emptyMsg) {
   el.innerHTML = "";
   if (items.length === 0) {
@@ -2434,6 +2449,7 @@ function switchTab(tab) {
     if (btnEl) btnEl.classList.toggle("active", t === tab);
   });
   if (tab === "lists") renderLists();
+  if (tab === "week") scrollWeekToToday(); // v69
   updateWakeLock();
   if (state.fabOpen) buildFabFlyout(); // refresh contextual options
 }
@@ -2455,7 +2471,7 @@ function wireUI() {
 
   $("week-prev").addEventListener("click", () => { state.weekOffset--; renderWeek(); });
   $("week-next").addEventListener("click", () => { state.weekOffset++; renderWeek(); });
-  $("week-today").addEventListener("click", () => { state.weekOffset = 0; renderWeek(); });
+  $("week-today").addEventListener("click", () => { state.weekOffset = 0; renderWeek().then(scrollWeekToToday); }); // v69
 
   // Tab bar divs
   ["today", "week", "lists"].forEach(t => {

@@ -70,7 +70,16 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .empty { color: var(--muted); font-size: 0.9rem; padding: 12px 2px; }
 
 .day-group { margin-bottom: 14px; }
-.day-group .day-head { font-size: 0.85rem; font-weight: 700; margin: 0 0 6px;
+/* v69: sticky per-day header for the Week tab, matching the Lists tab's
+   sticky section heads. top:0 + padding-top absorbing the safe-area inset
+   (rather than top:env(safe-area-inset-top) with no padding) means the
+   header's own opaque background seals the notch/Dynamic Island strip
+   instead of leaving it transparent for scrolled content to show through —
+   same fix as .lists-project-bar. scrollWeekToToday() scrolls today's
+   header to this exact position when the Week tab is opened. */
+.day-group .day-head { position: sticky; top: 0; z-index: 5; background: var(--bg);
+  font-size: 0.85rem; font-weight: 700; margin: 0;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 0 6px;
   color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
 .day-group.past { opacity: 0.55; }
 
