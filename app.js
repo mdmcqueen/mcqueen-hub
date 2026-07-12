@@ -1825,7 +1825,19 @@ async function renderWeek() {
   const today = todayISO();
   for (let i = 0; i < 7; i++) {
     const dISO = isoPlus(monday, i);
-    const dayEvents = events.filter((x) => evDate(x.ev) === dISO);
+    // v66: sort by time, not by whichever calendar's fetch happened to
+    // resolve first — fetchRange awaits all calendars in parallel and
+    // appends each one's whole batch as it lands, so unsorted entries read
+    // as "grouped by calendar," not "how the day unfolds." All-day/untimed
+    // events sort to the end, matching the Today tab's convention.
+    const dayEvents = events.filter((x) => evDate(x.ev) === dISO).sort((a, b) => {
+      const ta = parseItemTime(a.ev.start.dateTime);
+      const tb = parseItemTime(b.ev.start.dateTime);
+      if (!ta && !tb) return 0;
+      if (!ta) return 1;
+      if (!tb) return -1;
+      return ta - tb;
+    });
     const g = document.createElement("div");
     g.className = "day-group" + (dISO < today ? " past" : "");
     const h = document.createElement("div"); h.className = "day-head";
