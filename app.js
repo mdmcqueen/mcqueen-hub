@@ -76,13 +76,31 @@ function initAuth() {
     state.token = cachedTok; state.tokenExp = cachedExp;
     showMain(); boot(); return;
   }
-  if (localStorage.getItem("hub.authed") === "1") requestToken(needsReconsent); else showSignin();
+  // v72: always try a SILENT grab first, even with no "hub.authed" flag. The
+  // Google grant lives server-side and survives localStorage being evicted (iOS
+  // ITP; an installed PWA also has a separate store from Safari's). GIS does a
+  // prompt:"" request through a hidden iframe — no popup, no user gesture needed
+  // — so if the grant is still good we land straight in the app. Only if it
+  // fails do we show the sign-in screen, whose button does the real consent
+  // inside a click (a popup outside a gesture would be blocked).
+  // Deliberately NOT passing needsReconsent here: that would force prompt:"consent"
+  // at load with no gesture. A grant missing a scope is caught in onToken instead.
+  requestToken(false);
 }
 function requestToken(forceConsent) {
   state.tokenClient.requestAccessToken({ prompt: forceConsent ? "consent" : "" });
 }
 async function onToken(resp) {
   if (resp.error) { showSignin(); return; }
+  // v72: a silent request can succeed while granting FEWER scopes than we asked
+  // for (e.g. an older grant predating a SCOPE_VERSION bump). GIS reports what was
+  // actually granted; if anything is missing, bail to the sign-in screen so the
+  // user can tap through a real consent. Defensive: if resp.scope is absent, trust it.
+  if (resp.scope) {
+    const granted = resp.scope.split(" ").filter(Boolean);
+    const missing = CONFIG.SCOPES.split(" ").filter((s) => s && !granted.includes(s));
+    if (missing.length) { showSignin(); return; }
+  }
   state.token = resp.access_token;
   state.tokenExp = Date.now() + (resp.expires_in - 60) * 1000;
   localStorage.setItem("hub.authed", "1");
