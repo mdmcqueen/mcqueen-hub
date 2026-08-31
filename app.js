@@ -376,6 +376,7 @@ async function fetchCompletedItems(projectId) {
       "&since=" + encodeURIComponent(since) + "&until=" + encodeURIComponent(until));
     return (items || []).map(it => ({
       id: it.taskId || it.task_id || it.id,
+      projectId, // v73: completed rows need it so the store picker can read them
       content: it.content,
       description: it.description || "",
       labels: it.labels || [],
@@ -611,9 +612,9 @@ function renderPantryData(el, perStore) {
     perStore.forEach(({ store, open, done }) => {
       // v61: draggable — dropping into another group re-labels the item
       open.filter(t => locOf(t) === loc).forEach(t =>
-        rows.push(buildTaskRow(t, false, { storeBadge: badge(store.name), loc })));
+        rows.push(buildTaskRow(t, false, { storeBadge: badge(store.name), storeId: store.id, loc })));
       done.filter(c => locOf(c) === loc).forEach(c =>
-        rows.push(buildTaskRow(c, true, { storeBadge: badge(store.name), loc })));
+        rows.push(buildTaskRow(c, true, { storeBadge: badge(store.name), storeId: store.id, loc })));
     });
     if (!rows.length) return;
     const head = document.createElement("div");
@@ -812,7 +813,7 @@ function buildTaskRow(task, isDone, opts) {
     if (e.clientX - row.getBoundingClientRect().left < 46) return;
     if (Date.now() < (drag.suppressClickUntil || 0)) return;
     if (Date.now() < (swipe.suppressClickUntil || 0)) return;
-    openTaskEdit(task, row);
+    openTaskEdit(task, { storeId: opts.storeId }); // v73
   });
   const cb = document.createElement("button");
   cb.className = "task-cb";
@@ -932,18 +933,31 @@ const homeLocOf = (task) => {
   return m ? locs.find(n => n.toLowerCase() === String(m).toLowerCase()) : "";
 };
 
-function openTaskEdit(task) {
+function openTaskEdit(task, opts) {
+  opts = opts || {};
   const old = $("task-edit");
   if (old) old.remove();
   const modal = document.createElement("div");
   modal.className = "modal"; modal.id = "task-edit";
   const card = document.createElement("div");
   card.className = "modal-card";
+  /* v73: which store list this item lives in. The row supplies it (the Pantry
+     lens knows, and completed rows now carry projectId); on a real store list
+     the active list is itself the store. Only offered when there's more than
+     one store to choose between and we actually know the current one. */
+  const storeList = (groceryContext() || {}).stores || [];
+  const startStore = opts.storeId || task.projectId || task.project_id ||
+    (storeList.some(s => s.id === state.activeListId) ? state.activeListId : null);
+  const showStores = storeList.length > 1 && storeList.some(s => s.id === startStore);
+  let chosenStore = startStore;
   card.innerHTML = `
     <div class="modal-head"><strong>Edit item</strong><button class="btn-icon" id="te-close">✕</button></div>
     <input id="te-title" class="settings-token-input" type="text" autocomplete="off">
     <div class="settings-section-label" style="margin-top:16px">Home location</div>
-    <div class="te-locs" id="te-locs"></div>
+    <div class="te-locs" id="te-locs"></div>` +
+    (showStores ? `
+    <div class="settings-section-label" style="margin-top:16px">Store</div>
+    <div class="te-locs" id="te-stores"></div>` : "") + `
     <div class="settings-token-actions" style="margin-top:16px"><button id="te-save" class="settings-btn-primary">Save</button></div>`;
   modal.appendChild(card);
   document.body.appendChild(modal);
@@ -962,6 +976,20 @@ function openTaskEdit(task) {
     });
   };
   renderLocs();
+  // v73: unlike home location, store is not clearable — an item must live in some store list.
+  const renderStores = () => {
+    const el = $("te-stores");
+    if (!el) return;
+    el.innerHTML = "";
+    storeList.forEach(s => {
+      const b = document.createElement("button");
+      b.className = "cap-pick-btn" + (chosenStore === s.id ? " te-active" : "");
+      b.textContent = s.name;
+      b.onclick = () => { chosenStore = s.id; renderStores(); };
+      el.appendChild(b);
+    });
+  };
+  renderStores();
   const close = () => { modal.remove(); unlockBodyScroll(); };
   $("te-close").onclick = close;
   modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
@@ -973,7 +1001,13 @@ function openTaskEdit(task) {
     try {
       await todoistFetch("/tasks/" + task.id, "POST", { content: newTitle, labels });
       task.content = newTitle; task.labels = labels;
-      toast("Saved");
+      if (showStores && chosenStore && chosenStore !== startStore) {
+        await moveTask(task.id, { project_id: chosenStore }); // v73
+        const s = storeList.find(x => x.id === chosenStore);
+        toast("Moved to " + (s ? s.name : "store"));
+      } else {
+        toast("Saved");
+      }
       loadTasks();
     } catch (_) {
       toast("Couldn't save — try again");
