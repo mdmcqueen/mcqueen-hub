@@ -209,6 +209,18 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 .task-list.trip .swipe-wrap:has(.task-row.qty-zero) { display: none; }
 .task-list.trip .task-row { padding: 17px 14px; }
 .task-list.trip .task-label { font-size: 1.05rem; }
+/* v76: trip mode is one-handed and on the move, so the checkbox grows — but
+   the ROW must not. It doesn't: in trip mode every visible row carries the
+   qty stepper, whose 26px buttons already set the row's content height, so
+   matching that 26px costs exactly zero extra height. The real win is the
+   tap target: ::after extends the hit area well past the drawn box without
+   touching layout. It stays inside the row's own 17px padding on purpose —
+   bleeding into the neighbours would risk checking off the wrong item
+   mid-aisle, which is worse than a small target. */
+.task-list.trip .task-cb { position: relative; }
+.task-list.trip .task-cb svg { width: 26px; height: 26px; }
+.task-list.trip .task-cb::after { content: ""; position: absolute;
+  inset: -14px -12px; border-radius: 12px; }
 /* v65: collapse-and-fade before removal, instead of an instant snap, when
    a checked-off row's grace period elapses in trip mode. */
 .swipe-wrap.leaving { transition: opacity 0.32s ease, max-height 0.32s ease, margin-bottom 0.32s ease;

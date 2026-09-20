@@ -922,7 +922,14 @@ function buildTaskRow(task, isDone, opts) {
   // of opening edit.
   row.addEventListener("click", (e) => {
     if (e.target.closest(".task-cb")) return;
-    if (e.clientX - row.getBoundingClientRect().left < 46) return;
+    // v76: measure the excluded checkbox gutter instead of hard-coding it.
+    // Trip mode draws a bigger box with a bigger tap area, and a fixed 46px
+    // would let a tap beside it open the edit sheet instead of checking off.
+    // Outside trip mode this still works out to exactly 46px.
+    const rowLeft = row.getBoundingClientRect().left;
+    const cbBox = row.querySelector(".task-cb");
+    const gutter = cbBox ? (cbBox.getBoundingClientRect().right - rowLeft + 12) : 46;
+    if (e.clientX - rowLeft < gutter) return;
     if (Date.now() < (drag.suppressClickUntil || 0)) return;
     if (Date.now() < (swipe.suppressClickUntil || 0)) return;
     openTaskEdit(task, { storeId: opts.storeId }); // v73
