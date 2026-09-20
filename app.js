@@ -130,6 +130,7 @@ async function gapiFetch(url) {
 }
 async function boot() {
   await restoreSettingsFromDriveIfEmpty();
+  flushOutbox(); // v75: a relaunch heals anything left queued from last session
   // v58: relaunch lands where you were — with cached lists this paints the
   // grocery list instantly even before any network call resolves.
   const savedTab = localStorage.getItem("hub.activeTab");
@@ -187,7 +188,21 @@ async function todoistFetch(path, method = "GET", body = null) {
   if (body) headers["Content-Type"] = "application/json";
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(CONFIG.TODOIST + path, opts);
+  /* v75: a fetch with no deadline can hang forever on captive or flaky store
+     wi-fi. The await never settles, so the catch never runs, no error is ever
+     shown, and the caller believes the write succeeded. Abort at 15s so a
+     stalled request becomes a real, catchable failure. */
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  opts.signal = ctl.signal;
+  let r;
+  try {
+    r = await fetch(CONFIG.TODOIST + path, opts);
+  } catch (_) {
+    throw new Error(ctl.signal.aborted ? "todoist-timeout" : "todoist-network");
+  } finally {
+    clearTimeout(timer);
+  }
   if (!r.ok) throw new Error("todoist-" + r.status);
   if (r.status === 204) return null;
   return r.json();
@@ -494,7 +509,19 @@ function showTripSummary(names) {
 /* v58: render body extracted so cached data (instant paint on relaunch) and
    fresh network data share one code path. */
 function renderListData(el, data) {
-  const { tasks, sections, doneItems, inventory } = data;
+  let { tasks, sections, doneItems, inventory } = data;
+  /* v75: an unconfirmed check-off still lives in the outbox, so a refetch
+     that reports the item as open — or a cached paint from before the tap —
+     must not flip it back to unchecked. */
+  const pending = outboxMap();
+  if (Object.keys(pending).length) {
+    const closing = (tasks || []).filter(t => pending[t.id] === "close");
+    const reopening = (doneItems || []).filter(t => pending[t.id] === "reopen");
+    if (closing.length || reopening.length) {
+      tasks = (tasks || []).filter(t => pending[t.id] !== "close").concat(reopening);
+      doneItems = (doneItems || []).filter(t => pending[t.id] !== "reopen").concat(closing);
+    }
+  }
   // v56: inventory items stay readable when checked — the checkmark means
   // "stocked at home," not "done with this forever."
   el.classList.toggle("inventory", !!inventory);
@@ -560,6 +587,87 @@ function writeListCache(id, data) {
   try { localStorage.setItem(listCacheKey(id), JSON.stringify(data)); } catch (_) {}
 }
 
+/* ---------- offline outbox (v75) ----------
+   A check-off used to be fire-and-forget: the row was ticked, trip mode hid
+   it 2.2s later, and the close request went out unsupervised. If that request
+   failed — or hung, which on store wi-fi it does — nothing recovered it. The
+   row was already gone, so the rollback had no row to roll back, and the next
+   refresh quietly showed the item as still needed. That is exactly what
+   happened at Whole Foods on 2026-09-20: four items checked off mid-aisle
+   left no trace in Todoist at all.
+
+   Now the intent is written down BEFORE the network call and only cleared on
+   confirmation, so a check-off survives a timeout, a dropped connection, a
+   backgrounded PWA, or a relaunch, and is retried until it lands. */
+const OUTBOX_KEY = "hub.outbox";
+function readOutbox() {
+  try { const a = JSON.parse(localStorage.getItem(OUTBOX_KEY) || "[]"); return Array.isArray(a) ? a : []; }
+  catch (_) { return []; }
+}
+function writeOutbox(arr) {
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(arr)); } catch (_) {}
+}
+function outboxPut(taskId, op, projectId) {
+  const arr = readOutbox().filter(e => e.taskId !== taskId); // newest intent wins
+  arr.push({ taskId, op, projectId, at: Date.now() });
+  writeOutbox(arr);
+}
+function outboxDrop(taskId) {
+  writeOutbox(readOutbox().filter(e => e.taskId !== taskId));
+}
+function outboxMap() {
+  const m = {};
+  readOutbox().forEach(e => { m[e.taskId] = e.op; });
+  return m;
+}
+
+// Keep the cached list in step with a confirmed write, so the pill badge and
+// an offline relaunch don't fall back to a pre-check-off snapshot.
+function cacheMarkDone(projectId, taskId) {
+  const c = projectId ? readListCache(projectId) : null;
+  if (!c || !Array.isArray(c.tasks)) return;
+  const t = c.tasks.find(x => x.id === taskId);
+  if (!t) return;
+  writeListCache(projectId, { ...c,
+    tasks: c.tasks.filter(x => x.id !== taskId),
+    doneItems: (c.doneItems || []).concat([t]) });
+}
+function cacheMarkOpen(projectId, taskId) {
+  const c = projectId ? readListCache(projectId) : null;
+  if (!c) return;
+  const d = (c.doneItems || []).find(x => x.id === taskId);
+  if (!d) return;
+  writeListCache(projectId, { ...c,
+    tasks: (c.tasks || []).concat([d]),
+    doneItems: (c.doneItems || []).filter(x => x.id !== taskId) });
+}
+
+let _flushing = false;
+async function flushOutbox() {
+  if (_flushing || navigator.onLine === false) return;
+  if (!readOutbox().length || !getTodoistToken()) return;
+  _flushing = true;
+  let settled = 0, stalled = false;
+  try {
+    for (const e of readOutbox()) {
+      try {
+        await todoistFetch("/tasks/" + e.taskId + "/" + (e.op === "close" ? "close" : "reopen"), "POST");
+        outboxDrop(e.taskId);
+        if (e.op === "close") cacheMarkDone(e.projectId, e.taskId);
+        else cacheMarkOpen(e.projectId, e.taskId);
+        settled++;
+      } catch (err) {
+        const code = parseInt((/todoist-(\d+)/.exec(String(err && err.message)) || [])[1], 10);
+        if (code >= 400 && code < 500) { outboxDrop(e.taskId); settled++; } // gone or rejected: stop retrying
+        else { stalled = true; break; }                                     // offline/timeout/5xx: keep for later
+      }
+    }
+  } finally { _flushing = false; }
+  if (settled) buildProjectBar();
+  const left = readOutbox().length;
+  if (stalled && left) toast(left + (left === 1 ? " change" : " changes") + " waiting to sync");
+}
+
 async function loadTasks() {
   const ctx = groceryContext();
   if (ctx && ctx.pantry && state.activeListId === ctx.pantry.id) return renderPantryLens(ctx);
@@ -575,6 +683,7 @@ async function loadTasks() {
     if (cached && cached.tasks) renderListData(el, { ...cached, inventory });
     else el.innerHTML = `<div class="empty" style="font-size:0.8rem;">Loading…</div>`;
   }
+  await flushOutbox(); // v75: land any queued check-offs before reading back
   try {
     const [tasks, sections, completed] = await Promise.all([
       todoistFetchAll("/tasks?project_id=" + state.activeListId),
@@ -705,7 +814,10 @@ const tripOn = () => localStorage.getItem("hub.tripMode") === "1";
 function neededCount(pid) {
   const c = readListCache(pid);
   if (!c || !c.tasks) return null;
-  return c.tasks.filter(t => qtyOf(t) >= 1).length;
+  // v75: discount check-offs still in flight, so the badge drops on the tap
+  // instead of sitting on the count from the last completed refresh.
+  const pend = outboxMap();
+  return c.tasks.filter(t => qtyOf(t) >= 1 && pend[t.id] !== "close").length;
 }
 
 // v55: recurring tasks "roll forward" on completion rather than finishing —
@@ -1081,17 +1193,35 @@ async function completeTask(id, ctx) {
       startLeaveAnimation(wrap);
     }, 2200);
   }
+  // v75: write the intent down before going to the network.
+  const projectId = (ctx && ctx.data && ctx.data.projectId) || state.activeListId;
+  outboxPut(id, "close", projectId);
+  buildProjectBar(); // badge reflects the tap right away
   try {
     await todoistFetch("/tasks/" + id + "/close", "POST");
+    outboxDrop(id);
+    cacheMarkDone(projectId, id);
+    buildProjectBar();
   } catch (e) {
-    toast("Couldn't complete — try again");
-    if (wrap) { clearTimeout(wrap._tripHideTimer); wrap.classList.remove("pending-hide"); }
-    if (row) {
-      row.classList.remove("task-done");
-      const cb = row.querySelector(".task-cb");
-      if (cb) { cb.innerHTML = CHECK_OPEN_SVG; cb.dataset.done = "0"; }
+    const code = parseInt((/todoist-(\d+)/.exec(String(e && e.message)) || [])[1], 10);
+    if (code >= 400 && code < 500) {
+      // Rejected outright (task deleted, bad request) — retrying won't help,
+      // so undo the optimistic UI and say so.
+      outboxDrop(id);
+      toast("Couldn't complete — try again");
+      if (wrap) { clearTimeout(wrap._tripHideTimer); wrap.classList.remove("pending-hide"); }
+      if (row) {
+        row.classList.remove("task-done");
+        const cb = row.querySelector(".task-cb");
+        if (cb) { cb.innerHTML = CHECK_OPEN_SVG; cb.dataset.done = "0"; }
+      }
+      state.completedRecently.delete(id);
+      buildProjectBar();
+    } else {
+      // Offline, timed out, or Todoist is down: the check-off stays queued and
+      // the item stays checked. Don't put it back on the shelf.
+      toast("Saved — will sync when you're back online");
     }
-    state.completedRecently.delete(id);
   }
 }
 
@@ -1110,14 +1240,27 @@ async function uncompleteTask(id) {
     if (cb) { cb.innerHTML = CHECK_OPEN_SVG; cb.dataset.done = "0"; }
   }
   state.completedRecently.delete(id);
+  const projectId = state.activeListId; // v75
+  outboxPut(id, "reopen", projectId);
+  buildProjectBar();
   try {
     await todoistFetch("/tasks/" + id + "/reopen", "POST");
+    outboxDrop(id);
+    cacheMarkOpen(projectId, id);
+    buildProjectBar();
   } catch (e) {
-    toast("Couldn't undo — try again");
-    if (row) {
-      row.classList.add("task-done");
-      const cb = row.querySelector(".task-cb");
-      if (cb) { cb.innerHTML = CHECK_DONE_SVG; cb.dataset.done = "1"; }
+    const code = parseInt((/todoist-(\d+)/.exec(String(e && e.message)) || [])[1], 10);
+    if (code >= 400 && code < 500) {
+      outboxDrop(id);
+      toast("Couldn't undo — try again");
+      if (row) {
+        row.classList.add("task-done");
+        const cb = row.querySelector(".task-cb");
+        if (cb) { cb.innerHTML = CHECK_DONE_SVG; cb.dataset.done = "1"; }
+      }
+      buildProjectBar();
+    } else {
+      toast("Saved — will sync when you're back online");
     }
   }
 }
@@ -2619,8 +2762,12 @@ function wireUI() {
 
   document.addEventListener("visibilitychange", () => {
     updateWakeLock(); // v58: re-acquire on return, release on hide
-    if (!document.hidden && localStorage.getItem("hub.authed") === "1" && ensureToken()) refreshAll();
+    if (!document.hidden) {
+      flushOutbox(); // v75: coming back to the app is a chance to sync
+      if (localStorage.getItem("hub.authed") === "1" && ensureToken()) refreshAll();
+    }
   });
+  window.addEventListener("online", flushOutbox); // v75
 
   wirePullToRefresh();
   wireDrag();
