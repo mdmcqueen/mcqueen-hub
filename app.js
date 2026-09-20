@@ -1371,7 +1371,9 @@ function sdragMove(x, y) {
   const el = document.elementFromPoint(x, y);
   if (!el) return;
   const row2 = el.closest(".proj-sort-row");
-  if (row2 && row2 !== sdrag.row && row2.dataset.top === "1") {
+  if (row2 && row2 !== sdrag.row &&
+      row2.dataset.top === sdrag.row.dataset.top &&
+      row2.dataset.parent === sdrag.row.dataset.parent) { // v74: siblings only
     const r = row2.getBoundingClientRect();
     sdrag.after = y > r.top + r.height / 2;
     row2.classList.add(sdrag.after ? "drop-after" : "drop-before");
@@ -1385,17 +1387,28 @@ function finishSettingsDrag() {
   if (row) row.classList.remove("drag-src");
   if (overRow) overRow.classList.remove("drop-before", "drop-after");
   sdrag.active = false; sdrag.row = null; sdrag.pid = null; sdrag.ghost = null; sdrag.overRow = null;
-  if (!overRow || !pid) return;
+  if (!overRow || !pid || !row) return;
   const targetPid = overRow.dataset.id;
   if (targetPid === pid) return;
-  const arr = state.todoistProjects;
+  // v74: top-level rows reorder state.todoistProjects; a sub-list reorders its
+  // own parent's child array. sdragMove already guaranteed they're siblings.
+  const isTop = row.dataset.top === "1";
+  const parentId = row.dataset.parent || null;
+  const arr = isTop ? state.todoistProjects
+                    : ((state.todoistByParent || {})[parentId] || []);
   const from = arr.findIndex(p => p.id === pid);
   if (from < 0) return;
   const [moved] = arr.splice(from, 1);
   let to = arr.findIndex(p => p.id === targetPid);
   if (to < 0) { arr.splice(from, 0, moved); return; }
   arr.splice(to + (after ? 1 : 0), 0, moved);
-  localStorage.setItem("hub.projectOrder", JSON.stringify(arr.map(p => p.id)));
+  if (isTop) {
+    localStorage.setItem("hub.projectOrder", JSON.stringify(arr.map(p => p.id)));
+  } else {
+    const map = JSON.parse(localStorage.getItem("hub.subOrder") || "{}");
+    map[parentId] = arr.map(p => p.id);
+    localStorage.setItem("hub.subOrder", JSON.stringify(map));
+  }
   saveSettingsToDrive();
   buildProjectBar();
   if (state._renderProjRows) state._renderProjRows();
@@ -1487,6 +1500,21 @@ function ingestProjects(allProj) {
     if (par) (byParent[par] = byParent[par] || []).push(p);
   });
   Object.values(byParent).forEach(arr => arr.sort((a, b) => ord(a) - ord(b)));
+  /* v74: sub-lists are hand-orderable too. Todoist's child_order is the
+     default; a saved per-parent order overrides it, exactly the way
+     hub.projectOrder overrides it for top-level lists. Unknown/new children
+     keep their child_order position at the end. */
+  const savedSub = JSON.parse(localStorage.getItem("hub.subOrder") || "null");
+  if (savedSub) {
+    Object.keys(byParent).forEach(par => {
+      const want = savedSub[par];
+      if (!Array.isArray(want)) return;
+      const arr = byParent[par];
+      const idMap = Object.fromEntries(arr.map(c => [c.id, c]));
+      byParent[par] = want.map(id => idMap[id]).filter(Boolean)
+        .concat(arr.filter(c => !want.includes(c.id)));
+    });
+  }
   let tops = nonInbox.filter(p => !(p.parentId || p.parent_id));
   const savedOrder = JSON.parse(localStorage.getItem("hub.projectOrder") || "null");
   if (savedOrder) {
@@ -2236,6 +2264,7 @@ async function saveSettingsToDriveImpl() {
     calsOff: [...state.calsOff],
     projectsOff: JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"),
     projectOrder: JSON.parse(localStorage.getItem("hub.projectOrder") || "null"),
+    subOrder: JSON.parse(localStorage.getItem("hub.subOrder") || "null"), // v74
     inventoryMode: getInventoryOverrides(),
     activeListId: state.activeListId,
     todoistToken: getTodoistToken(),
@@ -2274,6 +2303,7 @@ async function restoreSettingsFromDriveIfEmpty() {
     if (data.calsOff) localStorage.setItem("hub.calsOff", JSON.stringify(data.calsOff));
     if (data.projectsOff) localStorage.setItem("hub.projectsOff", JSON.stringify(data.projectsOff));
     if (data.projectOrder) localStorage.setItem("hub.projectOrder", JSON.stringify(data.projectOrder));
+    if (data.subOrder) localStorage.setItem("hub.subOrder", JSON.stringify(data.subOrder)); // v74
     if (data.inventoryMode) localStorage.setItem("hub.inventoryMode", JSON.stringify(data.inventoryMode));
     if (data.activeListId) localStorage.setItem("hub.activeList", data.activeListId);
     if (data.todoistToken) localStorage.setItem("hub.todoistToken", data.todoistToken);
@@ -2400,7 +2430,7 @@ function openSettingsPage(page) {
 
       const hint = document.createElement("div");
       hint.className = "settings-hint";
-      hint.textContent = "Hold + drag a list to reorder (sub-lists move with their parent). ♻︎ = inventory list: checked items stay visible.";
+      hint.textContent = "Hold + drag a list to reorder. Sub-lists reorder within their own parent. ♻︎ = inventory list: checked items stay visible.";
       body.append(hint);
 
       // v52: drag to reorder (same gesture as task cards); ♻︎ toggles
@@ -2414,6 +2444,7 @@ function openSettingsPage(page) {
           row.className = "proj-sort-row";
           row.dataset.id = p.id;
           row.dataset.top = i >= 0 ? "1" : "0";
+          row.dataset.parent = p.parentId || p.parent_id || ""; // v74: siblings only
           if (p._depth) row.style.paddingLeft = (2 + p._depth * 18) + "px";
 
           const cb = document.createElement("input");
@@ -2443,7 +2474,7 @@ function openSettingsPage(page) {
           });
 
           row.append(cb, name, invBtn);
-          if (i >= 0) attachSettingsDrag(row, p.id);
+          attachSettingsDrag(row, p.id); // v74: sub-lists drag too
           projList.append(row);
         });
       };
