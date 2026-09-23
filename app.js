@@ -25,6 +25,8 @@ const state = {
   todoistProjects: [],
   activeListId: localStorage.getItem("hub.activeList") || null,
   fabOpen: false,
+  needConsent: false, // v78: escalate to prompt:"consent" only after a quiet try fails
+  tokenAsked: false,
   completedRecently: new Map(), // id -> { kind: 'today'|'list', data, expiresAt }
 };
 
@@ -66,7 +68,7 @@ function initAuth() {
     client_id: CONFIG.CLIENT_ID,
     scope: CONFIG.SCOPES,
     callback: onToken,
-    error_callback: () => { showSignin(); },
+    error_callback: () => { onTokenFailure(); },
   });
   const savedScopeVer = Number(localStorage.getItem("hub.scopeVer") || 0);
   const needsReconsent = savedScopeVer < CONFIG.SCOPE_VERSION;
@@ -87,11 +89,41 @@ function initAuth() {
   // at load with no gesture. A grant missing a scope is caught in onToken instead.
   requestToken(false);
 }
+/* v78: `prompt:"consent"` DEMANDS the whole Google gauntlet — account chooser,
+   unverified-app interstitial, "go to … (unsafe)", scope list — even when a
+   perfectly good grant already exists. It should be the last resort, not the
+   normal path. `prompt:""` reuses the existing grant silently.
+
+   Why the sign-in button still gets tapped at all on iPhone: the boot-time
+   silent attempt runs in a hidden iframe against accounts.google.com, which
+   needs a third-party cookie, and Safari blocks those outright. So on iOS the
+   silent boot path can never succeed and we always land on the sign-in screen.
+   The button's popup is a TOP-LEVEL window, though, so it does carry the real
+   Google session — `prompt:""` there should return a token with no UI at all.
+   `hint` names the account so the chooser is skipped too.
+
+   If that fails the grant is genuinely gone, so the NEXT tap escalates to
+   consent. Escalating inside the failure handler instead would open a popup
+   well after the gesture, which Safari blocks. */
 function requestToken(forceConsent) {
-  state.tokenClient.requestAccessToken({ prompt: forceConsent ? "consent" : "" });
+  const opts = { prompt: forceConsent || state.needConsent ? "consent" : "" };
+  if (state.email) opts.hint = state.email;
+  state.tokenAsked = true;
+  state.tokenClient.requestAccessToken(opts);
+}
+
+// Something went wrong getting a token: a silent attempt with no live grant,
+// a dismissed popup, a network failure. Arm the escalation so the next tap
+// asks for real consent, and get the user back to a button they can press.
+function onTokenFailure() {
+  if (state.tokenAsked && !state.needConsent) {
+    state.needConsent = true;
+    toast("Tap Sign in once more to reconnect Google");
+  }
+  showSignin();
 }
 async function onToken(resp) {
-  if (resp.error) { showSignin(); return; }
+  if (resp.error) { onTokenFailure(); return; }
   // v72: a silent request can succeed while granting FEWER scopes than we asked
   // for (e.g. an older grant predating a SCOPE_VERSION bump). GIS reports what was
   // actually granted; if anything is missing, bail to the sign-in screen so the
@@ -99,7 +131,8 @@ async function onToken(resp) {
   if (resp.scope) {
     const granted = resp.scope.split(" ").filter(Boolean);
     const missing = CONFIG.SCOPES.split(" ").filter((s) => s && !granted.includes(s));
-    if (missing.length) { showSignin(); return; }
+    // A short grant can only be fixed by real consent, so escalate directly.
+    if (missing.length) { state.needConsent = true; showSignin(); return; }
   }
   state.token = resp.access_token;
   state.tokenExp = Date.now() + (resp.expires_in - 60) * 1000;
@@ -107,6 +140,7 @@ async function onToken(resp) {
   localStorage.setItem("hub.tok", state.token);
   localStorage.setItem("hub.tokExp", String(state.tokenExp));
   localStorage.setItem("hub.scopeVer", String(CONFIG.SCOPE_VERSION));
+  state.needConsent = false; // v78: got a token, so stand the escalation down
   if (!state.email) {
     try {
       const r = await gapiFetch("https://www.googleapis.com/oauth2/v2/userinfo");
@@ -2728,7 +2762,9 @@ function toast(msg) {
 }
 
 function wireUI() {
-  $("btn-signin").addEventListener("click", () => requestToken(true));
+  // v78: ask for the QUIET flow first — the popup carries the live Google
+  // session, so an existing grant returns a token with no consent screen.
+  $("btn-signin").addEventListener("click", () => requestToken(false));
   $("btn-settings").addEventListener("click", openSettings);
   $("settings-back").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", closeSettings);
