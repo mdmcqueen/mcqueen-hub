@@ -23,6 +23,25 @@ worthless exactly when it is needed.
    sends no `Origin` header at all. Test with `fetch()` from the app's page,
    not by visiting the URL.
 
+## The settings store (`/settings/<bucket>`)
+
+Backs up each household's app settings — Todoist token, calendar feed URLs,
+list order, preferences — so a wiped phone or a second phone can restore
+them. Replaces the Google Drive app-data backup, which goes away when the
+app stops using Google.
+
+- Needs a **KV namespace bound as `SETTINGS`**. Without it the route
+  answers `503 settings store not configured` rather than failing obscurely.
+- `<bucket>` is 64 hex characters the **client** derives from a household
+  passphrase with PBKDF2. The passphrase never leaves the device.
+- The body is **encrypted on the device** before it is sent. This Worker
+  stores a blob it cannot read; whoever learns a bucket id gets ciphertext.
+- **The Origin check is not what protects this.** It stops other websites
+  using the Worker from a browser; it does not stop a direct client, which
+  can set any Origin header it likes. The client-side encryption is the
+  actual protection. Keep it that way — never add a route that returns
+  plaintext secrets on the strength of the Origin check alone.
+
 ## Deploying a change
 
 dash.cloudflare.com → Compute (Workers & Pages) → `white-thunder-5727` →

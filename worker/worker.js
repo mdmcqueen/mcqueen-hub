@@ -2,11 +2,11 @@ const ALLOWED_ORIGIN = 'https://mdmcqueen.github.io';
 const TODOIST_BASE = 'https://api.todoist.com/api/v1';
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
     const corsHeaders = {
       'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     };
 
@@ -18,6 +18,56 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // --- settings store -------------------------------------------------
+    // GET  /settings/<bucket>  -> the stored blob, 404 if there is none
+    // PUT  /settings/<bucket>  -> replace the stored blob
+    //
+    // <bucket> is 64 hex characters the CLIENT derives from a household
+    // passphrase (PBKDF2, high iteration count). The passphrase itself never
+    // leaves the device, and the body is encrypted client-side before it is
+    // sent, so this Worker stores an opaque blob it cannot read. Anyone who
+    // learns a bucket id gets ciphertext and nothing else.
+    //
+    // This endpoint is public, like the rest of the Worker: the Origin check
+    // above stops other WEBSITES using it, but not a direct client. The
+    // encryption, not the origin check, is what protects the contents.
+    if (url.pathname.startsWith('/settings/')) {
+      if (!env || !env.SETTINGS) {
+        // KV binding missing — say so plainly rather than failing obscurely.
+        return new Response('settings store not configured', { status: 503, headers: corsHeaders });
+      }
+      const bucket = url.pathname.slice('/settings/'.length);
+      if (!/^[0-9a-f]{64}$/.test(bucket)) {
+        return new Response('bad bucket', { status: 400, headers: corsHeaders });
+      }
+
+      if (request.method === 'GET') {
+        const blob = await env.SETTINGS.get('s:' + bucket);
+        if (blob === null) {
+          return new Response('not found', { status: 404, headers: corsHeaders });
+        }
+        return new Response(blob, {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
+      }
+
+      if (request.method === 'PUT') {
+        const body = await request.text();
+        if (body.length > 64 * 1024) {
+          return new Response('too large', { status: 413, headers: corsHeaders });
+        }
+        if (!body) {
+          return new Response('empty', { status: 400, headers: corsHeaders });
+        }
+        await env.SETTINGS.put('s:' + bucket, body);
+        return new Response('ok', { status: 200, headers: corsHeaders });
+      }
+
+      return new Response('method not allowed', { status: 405, headers: corsHeaders });
+    }
+    // --- end settings store ----------------------------------------------
 
     // --- calendar feed passthrough -------------------------------------
     // calendar.google.com serves the "secret address in iCal format" feeds
