@@ -2355,6 +2355,24 @@ function fillList(el, items, emptyMsg) {
    through to an unfiled Todoist task, i.e. the Inbox, which this app hides
    on purpose. One quietly lost note later, it is one action everywhere:
    add a task, to a list you can see and change. */
+/* v83: openFab/closeFab went out with the v82 flyout by mistake. Every
+   startup ran wireUI(), which referenced closeFab, so the whole app died on
+   load (blank screen). Restored without the flyout. */
+function openFab() {
+  state.fabOpen = true;
+  $("tb-add").classList.add("open");
+  $("fab-backdrop").classList.add("open");
+}
+function closeFab() {
+  state.fabOpen = false;
+  $("tb-add").classList.remove("open");
+  $("fab-backdrop").classList.remove("open");
+  $("cap-sheet").hidden = true;
+  unpinCapSheet();
+  const qp = $("cap-quick-pick");
+  if (qp) qp.hidden = true;
+}
+
 function defaultCaptureProject() {
   if (state.activeTab === "lists" && state.activeListId) {
     const ctx = groceryContext();
