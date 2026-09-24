@@ -525,6 +525,53 @@ async function fetchCompletedItems(projectId) {
 // inside their section, uncheckable back onto the list.
 // v53: section headers show an edit hint and stay visible even when empty
 // (a freshly added section must be visible to be usable).
+/* v82: collapsible list sections.
+
+   The rows are siblings of their heading in one flat fragment — not nested
+   inside it — because drag-to-reorder reads .task-row positions directly and
+   wrapping them would change what it sees. So collapsing walks forward from
+   a heading to the next one and hides those wrappers, leaving the structure
+   alone. Collapsed state is per list and remembered, so a long store list
+   opens the way you left it. */
+const collapsedKey = (listId) => "hub.collapsed." + listId;
+function getCollapsed(listId) {
+  try { return new Set(JSON.parse(localStorage.getItem(collapsedKey(listId)) || "[]")); }
+  catch (_) { return new Set(); }
+}
+function setCollapsed(listId, set) {
+  try { localStorage.setItem(collapsedKey(listId), JSON.stringify([...set])); } catch (_) {}
+}
+const secKeyOf = (head) => head.dataset.sectionId || head.dataset.loc || head.textContent || "";
+
+// Hide or show every row between this heading and the next one.
+function applySectionCollapse(head, collapsed) {
+  head.classList.toggle("collapsed", collapsed);
+  let n = head.nextElementSibling;
+  while (n && !n.classList.contains("list-section-head")) {
+    if (n.classList.contains("swipe-wrap") || n.classList.contains("task-row")) {
+      n.classList.toggle("sec-hidden", collapsed);
+    }
+    n = n.nextElementSibling;
+  }
+}
+
+function wireSectionCollapse(el, listId) {
+  const set = getCollapsed(listId);
+  el.querySelectorAll(".list-section-head").forEach((head) => {
+    const key = secKeyOf(head);
+    if (set.has(key)) applySectionCollapse(head, true);
+    head.addEventListener("click", (e) => {
+      // A section rename also lives on this heading (v50) — don't hijack it.
+      if (e.target.tagName === "INPUT") return;
+      const live = getCollapsed(listId);
+      const now = !live.has(key);
+      now ? live.add(key) : live.delete(key);
+      setCollapsed(listId, live);
+      applySectionCollapse(head, now);
+    });
+  });
+}
+
 function setSectionHeadContent(head, name) {
   head.textContent = name; // v62: pencil hint removed — tap still renames
 }
@@ -693,6 +740,7 @@ function renderListData(el, data) {
   // v65: swap in the "I'm done shopping" control while trip mode is active
   frag.appendChild((inventory && tripOn()) ? tripDoneButton() : listEndMarker());
   el.replaceChildren(frag);
+  wireSectionCollapse(el, state.activeListId); // v82
 }
 
 const listCacheKey = (id) => "hub.listCache." + id;
@@ -852,6 +900,7 @@ function renderPantryData(el, perStore) {
   });
   frag.appendChild(listEndMarker());
   el.replaceChildren(frag);
+  wireSectionCollapse(el, state.activeListId); // v82
 }
 
 async function renderPantryLens(ctx) {
@@ -1181,16 +1230,32 @@ function openTaskEdit(task, opts) {
      lens knows, and completed rows now carry projectId); on a real store list
      the active list is itself the store. Only offered when there's more than
      one store to choose between and we actually know the current one. */
-  const storeList = (groceryContext() || {}).stores || [];
+  /* v82: Home location comes from the Pantry's sections (Cupboard, Fridge,
+     Freezer). Those mean nothing on a non-grocery list, but the chips were
+     rendered for every task on every list — so editing something in Michael
+     offered to file it in the Freezer. Show them only inside the Groceries
+     family. */
+  const gc = groceryContext();
+  const groceryIds = new Set();
+  if (gc) {
+    if (gc.parent) groceryIds.add(gc.parent.id);
+    if (gc.pantry) groceryIds.add(gc.pantry.id);
+    (gc.stores || []).forEach((st) => groceryIds.add(st.id));
+  }
+  const taskProject = opts.storeId || task.projectId || task.project_id || state.activeListId;
+  const showLocs = groceryIds.has(taskProject);
+
+  const storeList = (gc || {}).stores || [];
   const startStore = opts.storeId || task.projectId || task.project_id ||
     (storeList.some(s => s.id === state.activeListId) ? state.activeListId : null);
   const showStores = storeList.length > 1 && storeList.some(s => s.id === startStore);
   let chosenStore = startStore;
   card.innerHTML = `
     <div class="modal-head"><strong>Edit item</strong><button class="btn-icon" id="te-close">✕</button></div>
-    <input id="te-title" class="settings-token-input" type="text" autocomplete="off">
+    <input id="te-title" class="settings-token-input" type="text" autocomplete="off">` +
+    (showLocs ? `
     <div class="settings-section-label" style="margin-top:16px">Home location</div>
-    <div class="te-locs" id="te-locs"></div>` +
+    <div class="te-locs" id="te-locs"></div>` : "") +
     (showStores ? `
     <div class="settings-section-label" style="margin-top:16px">Store</div>
     <div class="te-locs" id="te-stores"></div>` : "") + `
@@ -1202,6 +1267,7 @@ function openTaskEdit(task, opts) {
   let chosen = homeLocOf(task);
   const locsEl = $("te-locs");
   const renderLocs = () => {
+    if (!locsEl) return;          // v82: hidden outside the Groceries family
     locsEl.innerHTML = "";
     currentLocs().forEach(n => {
       const b = document.createElement("button");
@@ -1713,8 +1779,15 @@ async function persistReorder(sectionId) {
   catch (e) { console.warn("reorder not persisted", e); }
 }
 
-async function addTodoistTask(content, projectId, due) {
+async function addTodoistTask(content, projectId, due, opts) {
+  opts = opts || {};
   const body = { content };
+  // v82: both casings, same reasoning as the due fields below.
+  if (opts.assigneeId) {
+    body.responsibleUid = opts.assigneeId;
+    body.responsible_uid = opts.assigneeId;
+  }
+  if (opts.priority && opts.priority !== 1) body.priority = opts.priority;
   // The account's Todoist API (v1, unified) reads/returns camelCase field
   // names (confirmed via projectId/dueDate/inboxProject in GET responses),
   // but this was still POSTing snake_case-only keys (project_id, due_date...).
@@ -1745,7 +1818,27 @@ async function createTodoistProject(name) {
 // routing, exactly like typing in Todoist's own add bar. Used for Task
 // captures when no date chip is set; falls back to the plain endpoint.
 async function quickAddTask(text) {
-  await todoistFetch("/tasks/quick", "POST", { text, meta: false });
+  return todoistFetch("/tasks/quick", "POST", { text, meta: false });
+}
+
+/* v82: Todoist's quick-add parser always files into Inbox unless the text
+   says "#List". The + sheet already knows which list it was opened on, so a
+   task Todoist left in Inbox is moved there, and the sheet's default date
+   (Today/Week) fills in only when the words didn't name a date. */
+async function quickAddInto(text, projectId, defaultDate) {
+  const t = await quickAddTask(text);
+  if (!t || !t.id) return true;
+  const pid = t.projectId || t.project_id;
+  const inboxed = state.todoistInboxId ? pid === state.todoistInboxId : !/#\S/.test(text);
+  try {
+    if (projectId && inboxed && pid !== projectId) await moveTask(t.id, { project_id: projectId });
+    if (defaultDate && !t.due) {
+      await todoistFetch("/tasks/" + t.id, "POST", { dueDate: defaultDate, due_date: defaultDate });
+    }
+  } catch (_) {
+    return false;
+  }
+  return true;
 }
 
 /* Project hierarchy — v45.
@@ -2256,81 +2349,124 @@ function fillList(el, items, emptyMsg) {
 }
 
 /* ---------- FAB ---------- */
-const FAB_OPTS = {
-  today: [
-    { icon: "ti-calendar-plus", label: "Event" },
-    { icon: "ti-circle-check", label: "Task" },
-    { icon: "ti-bell", label: "Reminder" },
-  ],
-  week: [
-    { icon: "ti-calendar-plus", label: "Event" },
-    { icon: "ti-circle-check", label: "Task" },
-    { icon: "ti-bell", label: "Reminder" },
-  ],
-  lists: [
-    { icon: "ti-plus", label: "Item" },
-    { icon: "ti-note", label: "Note" },
-    { icon: "ti-list", label: "New list" },
-  ],
-};
-
-function openFab() {
-  state.fabOpen = true;
-  $("tb-add").classList.add("open");
-  $("fab-backdrop").classList.add("open");
-  buildFabFlyout();
-}
-function closeFab() {
-  state.fabOpen = false;
-  $("tb-add").classList.remove("open");
-  $("fab-backdrop").classList.remove("open");
-  $("cap-sheet").hidden = true;
-  unpinCapSheet();
-  const qp = $("cap-quick-pick");
-  if (qp) qp.hidden = true;
-}
-function buildFabFlyout() {
-  const flyout = $("fab-flyout");
-  flyout.innerHTML = "";
-  (FAB_OPTS[state.activeTab] || FAB_OPTS.today).forEach(o => {
-    const btn = document.createElement("div");
-    btn.className = "cap-opt";
-    btn.innerHTML = `<i class="ti ${o.icon}" aria-hidden="true"></i>${o.label}`;
-    btn.onclick = (e) => { e.stopPropagation(); $("fab-backdrop").classList.remove("open"); handleCapture(o.label); };
-    flyout.appendChild(btn);
-  });
-}
-
-function handleCapture(label) {
-  switch (label) {
-    case "Event":
-      openCapSheet("event", "Event title…", null, todayISO());
-      break;
-    case "Task":
-      // Week tab (or after clearing the date chip) supports natural language:
-      // "dentist tue 3pm", "water plants every saturday"
-      openCapSheet("task", state.activeTab === "today" ? "New task…" : "New task… (try: dentist tue 3pm)",
-        null, state.activeTab === "today" ? todayISO() : null);
-      break;
-    case "Reminder":
-      openCapSheet("reminder", "Remind me to…", null, state.activeTab === "today" ? todayISO() : null);
-      break;
-    case "Item": {
-      // In the Pantry lens, new items are real store tasks — default to the
-      // first store (edit the item afterward to set location/aisle).
-      const ctx = groceryContext();
-      const inPantry = ctx && ctx.pantry && state.activeListId === ctx.pantry.id;
-      const target = (inPantry && ctx.stores[0]) ? ctx.stores[0].id : state.activeListId;
-      openCapSheet("item", "Add item…", target);
-      break;
+/* v82: the + used to open a menu whose contents changed per tab — Event,
+   Reminder, Note, New list. Event needs Google, which is going away;
+   Reminder is just a task with a time; Note had no handler at all and fell
+   through to an unfiled Todoist task, i.e. the Inbox, which this app hides
+   on purpose. One quietly lost note later, it is one action everywhere:
+   add a task, to a list you can see and change. */
+function defaultCaptureProject() {
+  if (state.activeTab === "lists" && state.activeListId) {
+    const ctx = groceryContext();
+    // The Pantry is a lens, not a real list — a new item belongs in a store.
+    if (ctx && ctx.pantry && state.activeListId === ctx.pantry.id && ctx.stores[0]) {
+      return ctx.stores[0].id;
     }
-    case "Note":
-      openCapSheet("note", "Quick note…", null);
-      break;
-    case "New list":
-      openCapSheet("newlist", "List name…", null);
-      break;
+    return state.activeListId;
   }
+  // Today/Week have no list in view; default to Michael's own list.
+  const mine = allProjectsFlat().find((p) => /^michael$/i.test(p.name));
+  if (mine) return mine.id;
+  const first = (state.todoistProjects || [])[0];
+  return first ? first.id : null;
+}
+
+function openQuickAdd() {
+  const projectId = defaultCaptureProject();
+  const onList = state.activeTab === "lists";
+  openCapSheet("task", onList ? "Add to this list\u2026" : "New task\u2026",
+    projectId, onList ? null : todayISO());
+}
+
+/* v82: which list the task lands in, shown rather than assumed. The Note
+   that vanished did so because nothing on screen said where it was going. */
+function buildCapListChip(projectId) {
+  const sel = $("cap-list-select");
+  const txt = $("cap-list-txt");
+  const chip = $("cap-list-chip");
+  if (!sel || !chip) return;
+  sel.innerHTML = "";
+  const flat = allProjectsFlat();
+  if (!flat.length) { chip.hidden = true; return; }
+  flat.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = p.id;
+    o.textContent = (p._depth ? "\u2014 " : "") + p.name;
+    if (p.id === projectId) o.selected = true;
+    sel.appendChild(o);
+  });
+  const chosen = flat.find((p) => p.id === projectId) || flat[0];
+  txt.textContent = chosen ? chosen.name : "List";
+  chip.hidden = false;
+  sel.onchange = () => {
+    const p = flat.find((x) => x.id === sel.value);
+    $("cap-sheet").dataset.project = sel.value;
+    txt.textContent = p ? p.name : "List";
+    buildCapOwnerChip(sel.value);   // shared-ness may have changed
+  };
+}
+
+const CAP_PRIORITIES = [
+  { v: "1", label: "No priority" },
+  { v: "4", label: "Priority 1" },
+  { v: "3", label: "Priority 2" },
+  { v: "2", label: "Priority 3" },
+];
+function buildCapPriorityChip() {
+  const sel = $("cap-pri-select");
+  const txt = $("cap-pri-txt");
+  const chip = $("cap-pri-chip");
+  if (!sel || !chip) return;
+  sel.innerHTML = "";
+  CAP_PRIORITIES.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = p.v; o.textContent = p.label;
+    sel.appendChild(o);
+  });
+  sel.value = "1";
+  txt.textContent = "No priority";
+  chip.hidden = false;
+  sel.onchange = () => {
+    $("cap-sheet").dataset.priority = sel.value;
+    const p = CAP_PRIORITIES.find((x) => x.v === sel.value);
+    txt.textContent = p ? p.label : "No priority";
+  };
+}
+
+/* Assigning only works on a SHARED project — on a personal one there is
+   nobody to assign to, and Todoist rejects it. So the chip appears only
+   where it can actually do something, rather than failing after the fact. */
+async function buildCapOwnerChip(projectId) {
+  const sel = $("cap-own-select");
+  const txt = $("cap-own-txt");
+  const chip = $("cap-own-chip");
+  if (!sel || !chip) return;
+  chip.hidden = true;
+  $("cap-sheet").dataset.assignee = "";
+  if (!projectId) return;
+  let people = {};
+  try { people = await ensureCollaborators(projectId); } catch (_) { return; }
+  const ids = Object.keys(people || {});
+  if (ids.length < 2) return;            // personal list: no one to assign to
+  if ($("cap-sheet").dataset.project !== projectId) return;  // list changed meanwhile
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "Anyone";
+  sel.appendChild(none);
+  ids.forEach((id) => {
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = (people[id] || "").split(" ")[0] || people[id] || id;
+    sel.appendChild(o);
+  });
+  sel.value = "";
+  txt.textContent = "Anyone";
+  chip.hidden = false;
+  sel.onchange = () => {
+    $("cap-sheet").dataset.assignee = sel.value;
+    const opt = sel.options[sel.selectedIndex];
+    txt.textContent = opt ? opt.textContent : "Anyone";
+  };
 }
 
 /* ---------- capture sheet ---------- */
@@ -2363,6 +2499,12 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
   input.value = "";
   sheet.dataset.type = type;
   sheet.dataset.project = projectId || "";
+  sheet.dataset.assignee = "";
+  sheet.dataset.priority = "1";   // Todoist: 1 = p4 (none), 4 = p1
+  sheet.dataset.openDate = "";
+  buildCapListChip(projectId);
+  buildCapPriorityChip();
+  buildCapOwnerChip(projectId);   // async; hides itself on a personal list
 
   // Date + time chips — show for task, reminder, and event types
   const chip = $("cap-due-chip");
@@ -2375,6 +2517,7 @@ function openCapSheet(type, placeholder, projectId, dueDate) {
     const defaultDate = dueDate || "";
     $("cap-due-txt").textContent = defaultDate ? fmtDueChip(defaultDate) : "No date";
     chip.dataset.date = defaultDate;
+    sheet.dataset.openDate = defaultDate;
     $("cap-due-input").value = defaultDate;
     chip.hidden = false;
     timeChip.dataset.time = "";
@@ -2427,46 +2570,42 @@ async function submitCapSheet() {
   const chipTime = $("cap-time-chip").dataset.time || "";
 
   try {
-    if (type === "event") {
-      await addCalendarEvent(value, chipDate || todayISO(), chipTime);
-      toast("Event added");
-      closeFab();
-      if (state.activeTab === "today") renderToday();
-      if (state.activeTab === "week") renderWeek();
-      return;
-    }
     if (!getTodoistToken()) { toast("Set a Todoist token in Settings first"); return; }
-    if (type === "newlist") {
-      await createTodoistProject(value);
-      toast("List created");
-      renderLists();
+    let due = null;
+    // v63: lock the explicit local calendar date alongside the UTC instant
+    // (see addTodoistTask) — the actual fix for "timed tasks added for Today
+    // don't show up."
+    if (chipDate && chipTime) due = { date: chipDate, datetime: localToUTCISO(chipDate, chipTime) };
+    else if (chipDate) due = { date: chipDate };
+
+    const opts = {
+      assigneeId: sheet.dataset.assignee || null,
+      priority: Number(sheet.dataset.priority || 1),
+    };
+    // v82: with an explicit list, date, owner or priority on screen, honour
+    // them. Only a bare title goes through Todoist's own parser, which reads
+    // "dentist tue 3pm" and "#Groceries" out of the text itself.
+    // The date chip counts as "set" only if it was changed from what the
+    // sheet opened with (Today/Week open pre-set to today).
+    const openDate = sheet.dataset.openDate || "";
+    const plain = chipDate === openDate && !chipTime && !opts.assigneeId && opts.priority === 1;
+    if (plain) {
+      let landed = true;
+      try { landed = await quickAddInto(value, projectId, openDate); }
+      catch (_) { await addTodoistTask(value, projectId, due, opts); }
+      if (landed === false) { toast("Added, but it may be sitting in Inbox"); closeFab(); return; }
     } else {
-      let due = null;
-      // v63: lock the explicit local calendar date alongside the UTC instant
-      // (see addTodoistTask) — this is the actual fix for "timed tasks added
-      // for Today don't show up."
-      if (chipDate && chipTime) due = { date: chipDate, datetime: localToUTCISO(chipDate, chipTime) };
-      else if (chipDate) due = { date: chipDate };
-      else if (type === "reminder") due = { string: "today" };
-      if (type === "task" && !chipDate && !chipTime) {
-        // No chips → let Todoist parse the text itself ("dentist tue 3pm",
-        // "water plants every saturday", "milk #Groceries").
-        try { await quickAddTask(value); }
-        catch (_) { await addTodoistTask(value, projectId, due); }
-      } else {
-        await addTodoistTask(value, projectId, due);
-      }
-      toast("Added!");
-      closeFab();
-      if (type === "item" && state.activeTab === "lists") loadTasks();
-      if ((type === "task" || type === "reminder") && state.activeTab === "today") renderToday();
+      await addTodoistTask(value, projectId, due, opts);
     }
+    toast("Added!");
+    closeFab();
+    if (state.activeTab === "lists") loadTasks();
+    if (state.activeTab === "today") renderToday();
+    if (state.activeTab === "week") renderWeek();
   } catch (e) {
     if (String(e.message).startsWith("cal-403")) {
       toast("Re-connect Google Calendar access, then try again");
       requestToken(true);
-    } else if (type === "event") {
-      toast("Couldn't add event — try again");
     } else {
       toast("Couldn't save — check Todoist token in Settings");
     }
@@ -3112,6 +3251,42 @@ function openSettingsPage(page) {
     tokenSection.querySelector("#token-vis-btn").addEventListener("click", toggleTokenVisibility);
     tokenSection.querySelector("#token-save-btn").addEventListener("click", saveTodoistToken);
 
+    // v82: "New list" used to live in the + menu. The + is one action now,
+    // so list creation belongs with the rest of the list settings.
+    const newLabel = document.createElement("div");
+    newLabel.className = "settings-section-label";
+    newLabel.style.marginTop = "20px";
+    newLabel.textContent = "New list";
+    body.append(newLabel);
+    const newWrap = document.createElement("div");
+    newWrap.className = "settings-token-actions";
+    const newInput = document.createElement("input");
+    newInput.type = "text";
+    newInput.className = "settings-token-input";
+    newInput.placeholder = "List name\u2026";
+    newInput.style.flex = "2";
+    const newBtn = document.createElement("button");
+    newBtn.className = "settings-btn-primary";
+    newBtn.style.flex = "1";
+    newBtn.textContent = "Create";
+    newWrap.append(newInput, newBtn);
+    body.append(newWrap);
+    newBtn.addEventListener("click", async () => {
+      const name = newInput.value.trim();
+      if (!name) return;
+      newBtn.disabled = true;
+      try {
+        await createTodoistProject(name);
+        newInput.value = "";
+        toast("List created");
+        await renderLists();
+        openSettingsPage("lists");   // redraw with the new list in place
+      } catch (_) {
+        toast("Couldn't create the list \u2014 Todoist may be at its project limit");
+      }
+      newBtn.disabled = false;
+    });
+
     // Projects section
     if (state.todoistProjects && state.todoistProjects.length > 0) {
       const projLabel = document.createElement("div");
@@ -3270,7 +3445,8 @@ function switchTab(tab) {
   if (tab === "lists") renderLists();
   if (tab === "week") scrollWeekToToday(); // v69
   updateWakeLock();
-  if (state.fabOpen) buildFabFlyout(); // refresh contextual options
+  if (state.fabOpen) closeFab(); // v82: no per-tab menu to refresh; a tab
+                                 // change while capturing just cancels it
 }
 
 /* ---------- UI wiring ---------- */
@@ -3308,7 +3484,13 @@ function wireUI() {
   });
 
   // FAB
-  $("tb-add").addEventListener("click", () => { state.fabOpen ? closeFab() : openFab(); });
+  // v82: straight into the task sheet — no menu to choose from.
+  $("tb-add").addEventListener("click", () => {
+    if (state.fabOpen) { closeFab(); return; }
+    if (!getTodoistToken()) { toast("Set a Todoist token in Settings first"); return; }
+    openFab();
+    openQuickAdd();
+  });
   $("fab-backdrop").addEventListener("click", closeFab);
 
   // Capture sheet

@@ -282,6 +282,16 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 /* v55: dim the CONTENT of done rows, not the row itself — an opaque card
    keeps the red delete layer hidden underneath. */
 .task-done > * { opacity: 0.45; }
+/* v82: collapsible list sections. Rows stay siblings of their heading (drag
+   to reorder reads .task-row positions directly), so collapsing just hides
+   them rather than restructuring the DOM. */
+.sec-hidden { display: none !important; }
+.list-section-head { cursor: pointer; }
+.list-section-head::after { content: "\2013"; margin-left: 6px; opacity: 0.55; font-weight: 700; }
+.list-section-head.collapsed::after { content: "+"; }
+/* v82: capture chips that carry a native <select> rather than a date input */
+.cap-chip-plain { border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  font-weight: 600; cursor: pointer; position: relative; }
 .list-section-head { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--muted); padding: 14px 2px 6px;
   position: sticky; top: var(--pillbar-h, 46px); background: var(--bg); z-index: 5; } /* v65: pillbar-h now spans from the true top (see .lists-project-bar), so no separate safe-area add here */

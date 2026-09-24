@@ -40,7 +40,7 @@
     <header>
       <div>
         <div id="hdr-date" class="hdr-date"></div>
-        <span class="build-ver">v81</span>
+        <span class="build-ver">v82</span>
               </div>
       <button id="btn-settings" class="btn-settings" title="Settings"><i class="ti ti-settings"></i></button>
     </header>
@@ -69,7 +69,6 @@
 
     <!-- FAB backdrop + flyout -->
     <div id="fab-backdrop" class="fab-backdrop">
-      <div id="fab-flyout" class="fab-flyout"></div>
     </div>
 
     <!-- Capture input sheet -->
@@ -86,6 +85,21 @@
         <div id="cap-time-chip" class="cap-due-chip" data-time="" hidden>
           <span id="cap-time-txt">No time</span>
           <input type="time" id="cap-time-input" class="chip-native" aria-label="Time">
+        </div>
+        <!-- v82: where the task lands, shown rather than assumed. Native
+             selects behind the chip, same trick as the date/time inputs —
+             iOS gives a proper picker and it needs no custom menu. -->
+        <div id="cap-list-chip" class="cap-due-chip cap-chip-plain" hidden>
+          <span id="cap-list-txt">List</span>
+          <select id="cap-list-select" class="chip-native" aria-label="List"></select>
+        </div>
+        <div id="cap-own-chip" class="cap-due-chip cap-chip-plain" hidden>
+          <span id="cap-own-txt">Anyone</span>
+          <select id="cap-own-select" class="chip-native" aria-label="Owner"></select>
+        </div>
+        <div id="cap-pri-chip" class="cap-due-chip cap-chip-plain" hidden>
+          <span id="cap-pri-txt">No priority</span>
+          <select id="cap-pri-select" class="chip-native" aria-label="Priority"></select>
         </div>
       </div>
     </div>
