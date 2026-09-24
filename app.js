@@ -25,6 +25,8 @@ const state = {
   todoistProjects: [],
   activeListId: localStorage.getItem("hub.activeList") || null,
   fabOpen: false,
+  feedCache: {},      // v79: url -> { text, at }
+  feedErrors: {},     // v79: feed id -> true when its last fetch failed
   needConsent: false, // v78: escalate to prompt:"consent" only after a quiet try fails
   tokenAsked: false,
   completedRecently: new Map(), // id -> { kind: 'today'|'list', data, expiresAt }
@@ -163,7 +165,9 @@ async function gapiFetch(url) {
   return r.json();
 }
 async function boot() {
-  await restoreSettingsFromDriveIfEmpty();
+  // v79: the Drive backup needs a Google token. On the feeds path there
+  // may not be one, and that must not stop the app booting.
+  if (state.token) await restoreSettingsFromDriveIfEmpty();
   flushOutbox(); // v75: a relaunch heals anything left queued from last session
   // v58: relaunch lands where you were — with cached lists this paints the
   // grocery list instantly even before any network call resolves.
@@ -171,15 +175,88 @@ async function boot() {
   if (savedTab && savedTab !== "today" && savedTab !== state.activeTab) {
     switchTab(savedTab);
   }
+  // v79: with feeds configured the calendar list comes from them, and no
+  // Google call happens at all.
+  if (usingFeeds()) {
+    state.cals = getFeeds().map((f) => ({ id: f.id, summary: f.name || "Calendar" }));
+    await refreshAll();
+    return;
+  }
   try {
     const data = await gapiFetch("https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250");
     state.cals = (data.items || []).filter((c) => c.selected !== false || c.primary);
     await refreshAll();
   } catch (e) { if (String(e.message) !== "auth") toast("Couldn't load calendars"); }
 }
+/* ---------- calendar feeds (v79) ----------
+   Google's API needs an OAuth token, and on iOS that means clearing a
+   security gauntlet most launches (see the v78 notes). A calendar's
+   "secret address in iCal format" needs no sign-in at all, so when feeds
+   are configured they become the source and Google is not required to
+   open the app.
+
+   calendar.google.com sends no CORS headers, so feeds are read through
+   the Worker's /ical route rather than directly. */
+const getFeeds = () => {
+  try { const a = JSON.parse(localStorage.getItem("hub.calFeeds") || "[]"); return Array.isArray(a) ? a : []; }
+  catch (_) { return []; }
+};
+const setFeeds = (arr) => {
+  localStorage.setItem("hub.calFeeds", JSON.stringify(arr));
+  saveSettingsToDrive();
+};
+// Feeds configured => feeds are the calendar. No feeds => unchanged Google path.
+const usingFeeds = () => getFeeds().length > 0;
+const feedUrl = (u) => CONFIG.TODOIST + "/ical?u=" + encodeURIComponent(u);
+
+// Raw .ics text, briefly cached: Today and Week ask for different windows
+// but the same feeds, and refetching every feed per window is wasteful.
+async function fetchFeedText(url, maxAgeMs) {
+  const cache = (state.feedCache = state.feedCache || {});
+  const hit = cache[url];
+  if (hit && Date.now() - hit.at < (maxAgeMs == null ? 240000 : maxAgeMs)) return hit.text;
+  const r = await fetch(feedUrl(url));
+  if (!r.ok) throw new Error("feed-" + r.status);
+  const text = await r.text();
+  if (!/BEGIN:VCALENDAR/i.test(text)) throw new Error("not-a-calendar");
+  cache[url] = { text, at: Date.now() };
+  return text;
+}
+
+// Check one feed and read its own name out of it, for the settings screen.
+async function probeFeed(url) {
+  const text = await fetchFeedText(url, 0);
+  const parsed = ICAL.parse(text, CONFIG.TZ);
+  return { name: parsed.calName || "Calendar", events: parsed.events.length };
+}
+
+async function fetchRangeFromFeeds(startISO, days) {
+  const feeds = getFeeds();
+  const from = isoPlus(startISO, -1);
+  const to = isoPlus(startISO, days + 1);
+  const all = [];
+  await Promise.all(feeds.map(async (f) => {
+    try {
+      const text = await fetchFeedText(f.url);
+      const parsed = ICAL.parse(text, CONFIG.TZ);
+      const cal = { id: f.id, summary: f.name || parsed.calName || "Calendar" };
+      all.push(...ICAL.expand(parsed, from, to, CONFIG.TZ, cal));
+    } catch (_) {
+      // One bad feed must not empty the whole calendar.
+      state.feedErrors = state.feedErrors || {};
+      state.feedErrors[f.id] = true;
+    }
+  }));
+  return all;
+}
+
 async function fetchRange(startISO, days) {
   const key = startISO + ":" + days;
   if (state.ranges[key]) return state.ranges[key];
+  if (usingFeeds()) {                                    // v79
+    state.ranges[key] = await fetchRangeFromFeeds(startISO, days);
+    return state.ranges[key];
+  }
   const timeMin = isoPlus(startISO, -1) + "T00:00:00Z";
   const timeMax = isoPlus(startISO, days + 1) + "T00:00:00Z";
   const all = [];
@@ -2391,6 +2468,13 @@ async function submitCapSheet() {
 }
 
 async function addCalendarEvent(title, dateISO, timeHHMM) {
+  // v79: calendar feeds are read-only. Creating an event is the one thing
+  // that still needs a Google token, so fail with an explanation rather
+  // than a generic error.
+  if (!state.token) {
+    toast("Adding events needs Google — sign in from Settings");
+    throw new Error("no-google");
+  }
   let body;
   if (timeHHMM) {
     const startISO = localToUTCISO(dateISO, timeHHMM);
@@ -2448,6 +2532,7 @@ async function saveSettingsToDriveImpl() {
     calsOff: [...state.calsOff],
     projectsOff: JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"),
     projectOrder: JSON.parse(localStorage.getItem("hub.projectOrder") || "null"),
+    calFeeds: getFeeds(), // v79
     subOrder: JSON.parse(localStorage.getItem("hub.subOrder") || "null"), // v74
     inventoryMode: getInventoryOverrides(),
     activeListId: state.activeListId,
@@ -2487,6 +2572,7 @@ async function restoreSettingsFromDriveIfEmpty() {
     if (data.calsOff) localStorage.setItem("hub.calsOff", JSON.stringify(data.calsOff));
     if (data.projectsOff) localStorage.setItem("hub.projectsOff", JSON.stringify(data.projectsOff));
     if (data.projectOrder) localStorage.setItem("hub.projectOrder", JSON.stringify(data.projectOrder));
+    if (data.calFeeds) localStorage.setItem("hub.calFeeds", JSON.stringify(data.calFeeds)); // v79
     if (data.subOrder) localStorage.setItem("hub.subOrder", JSON.stringify(data.subOrder)); // v74
     if (data.inventoryMode) localStorage.setItem("hub.inventoryMode", JSON.stringify(data.inventoryMode));
     if (data.activeListId) localStorage.setItem("hub.activeList", data.activeListId);
@@ -2550,13 +2636,149 @@ function openSettings() {
   $("settings").hidden = false;
 }
 
-function openSettingsPage(page) {
-  $("settings-back").hidden = false;
-  const body = $("settings-body");
-  body.innerHTML = "";
+/* v79: Calendars settings — feeds first, Google only as the fallback.
 
-  if (page === "calendars") {
-    $("settings-title").textContent = "Calendars";
+   A feed URL is a credential (anyone holding it can read that calendar),
+   so it is never rendered into the page as text; only the calendar's own
+   name is shown. Each URL is checked by actually fetching it when added,
+   so a typo is caught here rather than showing up as a silently empty
+   Week tab days later. */
+function feedIdFor(url) {
+  let h = 0;
+  for (let i = 0; i < url.length; i++) { h = (h * 31 + url.charCodeAt(i)) | 0; }
+  return "feed" + (h >>> 0).toString(36);
+}
+
+function renderCalendarSettings(body) {
+  const feeds = getFeeds();
+
+  const label = document.createElement("div");
+  label.className = "settings-section-label";
+  label.textContent = "Calendar feeds";
+  body.append(label);
+
+  const hint = document.createElement("div");
+  hint.className = "settings-hint";
+  hint.textContent = feeds.length
+    ? "Reading from these feeds. No Google sign-in needed."
+    : "In Google Calendar: a calendar's Settings \u2192 Integrate calendar \u2192 " +
+      "\u201cSecret address in iCal format\u201d. Paste one per line below. " +
+      "Once a feed is added the app stops asking you to sign in to Google.";
+  body.append(hint);
+
+  const list = document.createElement("div");
+  body.append(list);
+
+  const drawList = () => {
+    list.innerHTML = "";
+    getFeeds().forEach((f) => {
+      const row = document.createElement("label"); row.className = "cal-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !state.calsOff.has(f.id);
+      cb.addEventListener("change", () => {
+        cb.checked ? state.calsOff.delete(f.id) : state.calsOff.add(f.id);
+        localStorage.setItem("hub.calsOff", JSON.stringify([...state.calsOff]));
+        saveSettingsToDrive();
+        state.ranges = {};
+        renderToday(); renderWeek();
+      });
+      const name = document.createElement("span");
+      name.style.flex = "1";
+      name.textContent = f.name || "Calendar";
+      if ((state.feedErrors || {})[f.id]) {
+        name.textContent += "  \u26a0\ufe0e couldn't load";
+        name.style.color = "var(--muted)";
+      }
+      const del = document.createElement("button");
+      del.className = "settings-btn-secondary";
+      del.style.flex = "0 0 auto";
+      del.textContent = "Remove";
+      del.addEventListener("click", (e) => {
+        e.preventDefault();
+        setFeeds(getFeeds().filter((x) => x.id !== f.id));
+        delete (state.feedCache || {})[f.url];
+        state.ranges = {};
+        drawList();
+        toast("Feed removed");
+        renderToday(); renderWeek();
+      });
+      row.append(cb, name, del);
+      list.append(row);
+    });
+  };
+  drawList();
+
+  const addLabel = document.createElement("div");
+  addLabel.className = "settings-section-label";
+  addLabel.style.marginTop = "16px";
+  addLabel.textContent = feeds.length ? "Add more" : "Add feeds";
+  body.append(addLabel);
+
+  const ta = document.createElement("textarea");
+  ta.className = "settings-token-input";
+  ta.rows = 4;
+  ta.placeholder = "https://calendar.google.com/calendar/ical/.../basic.ics\none per line";
+  ta.style.fontSize = "16px"; // v60: anything smaller makes iOS zoom the page
+  body.append(ta);
+
+  const status = document.createElement("div");
+  status.className = "settings-hint";
+  body.append(status);
+
+  const actions = document.createElement("div");
+  actions.className = "settings-token-actions";
+  const add = document.createElement("button");
+  add.className = "settings-btn-primary";
+  add.textContent = "Add feeds";
+  actions.append(add);
+  body.append(actions);
+
+  add.addEventListener("click", async () => {
+    const urls = ta.value.split(/\s+/).map((u) => u.trim()).filter(Boolean);
+    if (!urls.length) { status.textContent = "Paste at least one feed address."; return; }
+    add.disabled = true;
+    const existing = getFeeds();
+    const added = [];
+    const problems = [];
+    for (const url of urls) {
+      if (existing.some((f) => f.url === url)) { problems.push("already added"); continue; }
+      try {
+        const info = await probeFeed(url);      // real fetch: catches typos now
+        added.push({ id: feedIdFor(url), url, name: info.name });
+        status.textContent = "Added " + info.name + " (" + info.events + " entries)";
+      } catch (e) {
+        const why = String(e.message) === "not-a-calendar" ? "that address didn't return a calendar"
+          : /feed-4/.test(String(e.message)) ? "the address was rejected \u2014 check you copied all of it"
+          : "couldn't reach it";
+        problems.push(why);
+      }
+    }
+    add.disabled = false;
+    if (added.length) {
+      setFeeds(existing.concat(added));
+      ta.value = "";
+      state.ranges = {};
+      state.cals = getFeeds().map((f) => ({ id: f.id, summary: f.name || "Calendar" }));
+      drawList();
+      renderToday(); renderWeek();
+    }
+    if (problems.length) {
+      status.textContent = (added.length ? "Added " + added.length + ". " : "") +
+        problems.length + " didn't work: " + problems.join("; ");
+    } else if (added.length) {
+      status.textContent = "Added " + added.length + " feed" + (added.length > 1 ? "s" : "") + ".";
+    }
+  });
+
+  // Google calendars remain available until feeds take over, so nothing is
+  // lost mid-migration.
+  if (!feeds.length && state.cals && state.cals.length) {
+    const gl = document.createElement("div");
+    gl.className = "settings-section-label";
+    gl.style.marginTop = "20px";
+    gl.textContent = "Google calendars";
+    body.append(gl);
     [...state.cals]
       .sort((a, b) => (a.summaryOverride || a.summary || "").localeCompare(b.summaryOverride || b.summary || ""))
       .forEach((cal) => {
@@ -2572,6 +2794,17 @@ function openSettingsPage(page) {
         name.textContent = cal.summaryOverride || cal.summary || cal.id;
         row.append(cb, name); body.append(row);
       });
+  }
+}
+
+function openSettingsPage(page) {
+  $("settings-back").hidden = false;
+  const body = $("settings-body");
+  body.innerHTML = "";
+
+  if (page === "calendars") {
+    $("settings-title").textContent = "Calendars";
+    renderCalendarSettings(body);
   }
 
   if (page === "lists") {
@@ -2807,7 +3040,8 @@ function wireUI() {
     updateWakeLock(); // v58: re-acquire on return, release on hide
     if (!document.hidden) {
       flushOutbox(); // v75: coming back to the app is a chance to sync
-      if (localStorage.getItem("hub.authed") === "1" && ensureToken()) refreshAll();
+      if (usingFeeds()) refreshAll();                      // v79: no token needed
+      else if (localStorage.getItem("hub.authed") === "1" && ensureToken()) refreshAll();
     }
   });
   window.addEventListener("online", flushOutbox); // v75
@@ -2818,6 +3052,14 @@ function wireUI() {
 
 window.addEventListener("load", () => {
   wireUI();
+  // v79: with calendar feeds configured, nothing on the launch path needs
+  // Google — so show the app immediately instead of a sign-in screen.
+  // Sign-in stays available in Settings for the features that still use it.
+  if (usingFeeds()) {
+    showMain();
+    boot();
+    return;
+  }
   const start = () => (window.google && google.accounts ? initAuth() : setTimeout(start, 150));
   start();
 });
