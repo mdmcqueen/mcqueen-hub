@@ -27,6 +27,11 @@
       <p class="muted">One place for the family's day.</p>
       <button id="btn-signin" class="btn-primary">Sign in with Google</button>
       <p class="muted small">Use your @gmail.com account. Calendar access is read-only.</p>
+      <!-- v80: without this, a fresh install has to clear Google's sign-in
+           before it can reach the setting that removes the need for it. -->
+      <button id="btn-signin-feeds" class="settings-btn-secondary"
+              style="margin-top:18px;width:100%">Set up calendar feeds instead</button>
+      <p class="muted small">No Google account needed — paste a calendar's secret iCal address.</p>
     </div>
   </section>
 
@@ -35,7 +40,7 @@
     <header>
       <div>
         <div id="hdr-date" class="hdr-date"></div>
-        <span class="build-ver">v79</span>
+        <span class="build-ver">v80</span>
               </div>
       <button id="btn-settings" class="btn-settings" title="Settings"><i class="ti ti-settings"></i></button>
     </header>

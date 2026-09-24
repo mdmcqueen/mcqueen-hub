@@ -2761,7 +2761,15 @@ function renderCalendarSettings(body) {
       state.ranges = {};
       state.cals = getFeeds().map((f) => ({ id: f.id, summary: f.name || "Calendar" }));
       drawList();
-      renderToday(); renderWeek();
+      // v80: if this was done from the sign-in screen, the app has never
+      // started. Start it now rather than leaving a working setup behind a
+      // sign-in screen it no longer needs.
+      if ($("screen-main").hidden) {
+        showMain();
+        boot();
+      } else {
+        renderToday(); renderWeek();
+      }
     }
     if (problems.length) {
       status.textContent = (added.length ? "Added " + added.length + ". " : "") +
@@ -2998,6 +3006,13 @@ function wireUI() {
   // v78: ask for the QUIET flow first — the popup carries the live Google
   // session, so an existing grant returns a token with no consent screen.
   $("btn-signin").addEventListener("click", () => requestToken(false));
+  // v80: the settings modal is a sibling of both screens, so it opens fine
+  // over the sign-in screen. Straight to Calendars — that is the only thing
+  // worth doing from here.
+  $("btn-signin-feeds").addEventListener("click", () => {
+    openSettings();
+    openSettingsPage("calendars");
+  });
   $("btn-settings").addEventListener("click", openSettings);
   $("settings-back").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", closeSettings);
