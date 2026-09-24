@@ -168,6 +168,12 @@ async function boot() {
   // v79: the Drive backup needs a Google token. On the feeds path there
   // may not be one, and that must not stop the app booting.
   if (state.token) await restoreSettingsFromDriveIfEmpty();
+  // v81: pull the household settings first — they may carry the calendar
+  // feeds and Todoist token this device doesn't have yet.
+  if (syncOn()) {
+    try { if (await syncPull() === "applied") state.ranges = {}; }
+    catch (e) { console.warn("settings pull failed", e); }
+  }
   flushOutbox(); // v75: a relaunch heals anything left queued from last session
   // v58: relaunch lands where you were — with cached lists this paints the
   // grocery list instantly even before any network call resolves.
@@ -2508,7 +2514,133 @@ async function addCalendarEvent(title, dateISO, timeHHMM) {
 const DRIVE_SETTINGS_FILE = "hub-settings.json";
 let driveSaveChain = Promise.resolve();
 
+/* ---------- household sync (v81) ----------
+   The Drive backup only runs when a Google token happens to exist, which on
+   the feeds path it often doesn't. Without a replacement, losing browser
+   storage loses the Todoist token AND the calendar feeds, and Sasha's phone
+   would need everything typed in by hand.
+
+   So: a household passphrase. It is stretched with PBKDF2 into 64 bytes —
+   the first half encrypts the settings, the second half names the bucket
+   they are stored under. Both halves stay on the device. The Worker receives
+   an opaque blob and a bucket id and can decrypt neither, so someone who
+   learned a bucket id would get ciphertext.
+
+   The passphrase itself is never stored, only the derived bytes, so it
+   cannot be read back off a device. The same phrase on another phone derives
+   the same bucket and the same key — that is the whole sharing mechanism. */
+const SYNC_KEY = "hub.syncKey";      // base64 of the 64 derived bytes
+const SYNC_SALT = "mcqueen-hub-sync-v1";
+const SYNC_ITERATIONS = 200000;
+
+const b64 = (bytes) => {
+  let out = "";
+  bytes.forEach((b) => { out += String.fromCharCode(b); });
+  return btoa(out);
+};
+const unb64 = (str) => {
+  const bin = atob(str);
+  const a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return a;
+};
+const toHex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+async function deriveSyncBytes(passphrase) {
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: enc.encode(SYNC_SALT), iterations: SYNC_ITERATIONS, hash: "SHA-256" },
+    base, 512);
+  return new Uint8Array(bits);
+}
+
+const syncBytes = () => {
+  const v = localStorage.getItem(SYNC_KEY);
+  return v ? unb64(v) : null;
+};
+const syncOn = () => !!localStorage.getItem(SYNC_KEY);
+const syncBucket = (bytes) => toHex(bytes.slice(32, 64));
+const syncUrl = (bucket) => CONFIG.TODOIST + "/settings/" + bucket;
+
+async function syncEncrypt(obj, bytes) {
+  const key = await crypto.subtle.importKey("raw", bytes.slice(0, 32), "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key,
+    new TextEncoder().encode(JSON.stringify(obj)));
+  return JSON.stringify({ v: 1, iv: b64(iv), ct: b64(new Uint8Array(ct)) });
+}
+
+async function syncDecrypt(text, bytes) {
+  let env;
+  try { env = JSON.parse(text); } catch (_) { throw new Error("bad-blob"); }
+  if (!env || env.v !== 1 || !env.iv || !env.ct) throw new Error("bad-blob");
+  const key = await crypto.subtle.importKey("raw", bytes.slice(0, 32), "AES-GCM", false, ["decrypt"]);
+  let plain;
+  try {
+    plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(env.iv) }, key, unb64(env.ct));
+  } catch (_) {
+    // AES-GCM authenticates, so a wrong key fails here rather than quietly
+    // yielding garbage. That makes this the reliable "wrong passphrase" signal.
+    throw new Error("bad-passphrase");
+  }
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+async function syncPushNow() {
+  const bytes = syncBytes();
+  if (!bytes) return;
+  const payload = settingsPayload();
+  payload.savedAt = Date.now();
+  localStorage.setItem("hub.settingsAt", String(payload.savedAt));
+  const body = await syncEncrypt(payload, bytes);
+  const r = await fetch(syncUrl(syncBucket(bytes)), { method: "PUT", body });
+  if (!r.ok) throw new Error("sync-" + r.status);
+  localStorage.setItem("hub.syncAt", String(Date.now()));
+}
+
+let _syncTimer = null;
+function syncPush() {
+  if (!syncOn()) return;
+  clearTimeout(_syncTimer);
+  // Coalesce: toggling six lists in a row is one upload, not six.
+  _syncTimer = setTimeout(() => {
+    syncPushNow().catch((e) => console.warn("settings sync failed", e));
+  }, 1500);
+}
+
+/* "applied" | "current" | "empty". Newest wins by savedAt, so a phone that
+   has been offline cannot overwrite fresher settings from the other one
+   merely by opening later. */
+async function syncPull() {
+  const bytes = syncBytes();
+  if (!bytes) return "empty";
+  const r = await fetch(syncUrl(syncBucket(bytes)));
+  if (r.status === 404) return "empty";
+  if (!r.ok) throw new Error("sync-" + r.status);
+  const remote = await syncDecrypt(await r.text(), bytes);
+  const localAt = Number(localStorage.getItem("hub.settingsAt") || 0);
+  if (!(remote.savedAt > localAt)) return "current";
+  applySettings(remote);
+  localStorage.setItem("hub.syncAt", String(Date.now()));
+  return "applied";
+}
+
+async function syncConnect(passphrase) {
+  const bytes = await deriveSyncBytes(passphrase);
+  localStorage.setItem(SYNC_KEY, b64(bytes));
+  try {
+    const res = await syncPull();
+    if (res === "empty") { await syncPushNow(); return "seeded"; }  // first device
+    return res;
+  } catch (e) {
+    localStorage.removeItem(SYNC_KEY);   // never leave a half-connected state
+    throw e;
+  }
+}
+
 function saveSettingsToDrive() {
+  syncPush();   // v81: sync alongside the Drive backup, not instead of it
   driveSaveChain = driveSaveChain.then(saveSettingsToDriveImpl).catch((e) => {
     console.warn("Drive settings backup failed", e);
   });
@@ -2526,9 +2658,10 @@ async function driveFindSettingsFileId() {
   return (data.files && data.files[0]) ? data.files[0].id : null;
 }
 
-async function saveSettingsToDriveImpl() {
-  if (!state.token) return;
-  const payload = {
+// v81: one definition of "the settings", shared by the Drive backup and the
+// household sync, so the two can never drift apart.
+function settingsPayload() {
+  return {
     calsOff: [...state.calsOff],
     projectsOff: JSON.parse(localStorage.getItem("hub.projectsOff") || "[]"),
     projectOrder: JSON.parse(localStorage.getItem("hub.projectOrder") || "null"),
@@ -2537,8 +2670,29 @@ async function saveSettingsToDriveImpl() {
     inventoryMode: getInventoryOverrides(),
     activeListId: state.activeListId,
     todoistToken: getTodoistToken(),
-    savedAt: Date.now(),
+    savedAt: Number(localStorage.getItem("hub.settingsAt") || 0) || Date.now(),
   };
+}
+
+// v81: apply a settings payload, wherever it came from.
+function applySettings(data) {
+  if (!data) return;
+  if (data.calsOff) localStorage.setItem("hub.calsOff", JSON.stringify(data.calsOff));
+  if (data.projectsOff) localStorage.setItem("hub.projectsOff", JSON.stringify(data.projectsOff));
+  if (data.projectOrder) localStorage.setItem("hub.projectOrder", JSON.stringify(data.projectOrder));
+  if (data.subOrder) localStorage.setItem("hub.subOrder", JSON.stringify(data.subOrder));
+  if (data.inventoryMode) localStorage.setItem("hub.inventoryMode", JSON.stringify(data.inventoryMode));
+  if (data.activeListId) localStorage.setItem("hub.activeList", data.activeListId);
+  if (data.todoistToken) localStorage.setItem("hub.todoistToken", data.todoistToken);
+  if (data.calFeeds) localStorage.setItem("hub.calFeeds", JSON.stringify(data.calFeeds));
+  if (data.savedAt) localStorage.setItem("hub.settingsAt", String(data.savedAt));
+  state.calsOff = new Set(JSON.parse(localStorage.getItem("hub.calsOff") || "[]"));
+  state.activeListId = localStorage.getItem("hub.activeList") || null;
+}
+
+async function saveSettingsToDriveImpl() {
+  if (!state.token) return;
+  const payload = settingsPayload();
   let fileId = await driveFindSettingsFileId();
   if (!fileId) {
     const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
@@ -2624,6 +2778,7 @@ function openSettings() {
   const navItems = [
     { label: "Calendars", page: "calendars" },
     { label: "Lists", page: "lists" },
+    { label: "Household sync", page: "sync" }, // v81
   ];
   navItems.forEach(({ label, page }) => {
     const row = document.createElement("div");
@@ -2805,6 +2960,125 @@ function renderCalendarSettings(body) {
   }
 }
 
+/* v81: Household sync settings.
+
+   The passphrase is the only thing standing between the settings blob and
+   anyone who can reach the Worker, so the copy has to make that clear
+   without lecturing. It is never stored — only the bytes derived from it —
+   so there is no "show passphrase" and no way to recover it from a device.
+   Losing it means picking a new one and setting up once more. */
+function renderSyncSettings(body) {
+  const connected = syncOn();
+
+  const blurb = document.createElement("div");
+  blurb.className = "settings-hint";
+  blurb.textContent = connected
+    ? "This device is syncing. Enter the same phrase on another phone and it picks up these settings \u2014 lists, calendar feeds and the Todoist token."
+    : "Keeps your settings \u2014 lists, calendar feeds, Todoist token \u2014 backed up and shared across phones. " +
+      "Pick a phrase of a few words you'll remember. It never leaves this device: it's used to scramble the " +
+      "backup so only your phones can read it. It can't be recovered, so if you forget it you just pick a new one.";
+  body.append(blurb);
+
+  if (connected) {
+    const at = Number(localStorage.getItem("hub.syncAt") || 0);
+    const when = document.createElement("div");
+    when.className = "settings-hint";
+    when.textContent = at ? "Last synced " + fmt(new Date(at), { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+                          : "Not synced yet.";
+    body.append(when);
+
+    const status = document.createElement("div");
+    status.className = "settings-hint";
+    body.append(status);
+
+    const actions = document.createElement("div");
+    actions.className = "settings-token-actions";
+    const now = document.createElement("button");
+    now.className = "settings-btn-primary";
+    now.textContent = "Sync now";
+    const off = document.createElement("button");
+    off.className = "settings-btn-secondary";
+    off.textContent = "Disconnect";
+    actions.append(off, now);
+    body.append(actions);
+
+    now.addEventListener("click", async () => {
+      now.disabled = true; status.textContent = "Syncing\u2026";
+      try {
+        const res = await syncPull();
+        await syncPushNow();
+        status.textContent = res === "applied" ? "Updated from your other device." : "Up to date.";
+        when.textContent = "Last synced just now";
+        if (res === "applied") {
+          state.ranges = {};
+          state.cals = getFeeds().map((f) => ({ id: f.id, summary: f.name || "Calendar" }));
+          renderToday(); renderWeek();
+        }
+      } catch (e) {
+        status.textContent = String(e.message) === "bad-passphrase"
+          ? "That stored key no longer matches the backup. Disconnect and reconnect with the right phrase."
+          : "Couldn't sync \u2014 try again.";
+      }
+      now.disabled = false;
+    });
+
+    off.addEventListener("click", () => {
+      localStorage.removeItem(SYNC_KEY);
+      toast("Sync disconnected on this device");
+      openSettingsPage("sync");
+    });
+    return;
+  }
+
+  const input = document.createElement("input");
+  input.type = "password";
+  input.className = "settings-token-input";
+  input.placeholder = "Household phrase\u2026";
+  input.autocomplete = "off";
+  body.append(input);
+
+  const status = document.createElement("div");
+  status.className = "settings-hint";
+  body.append(status);
+
+  const actions = document.createElement("div");
+  actions.className = "settings-token-actions";
+  const go = document.createElement("button");
+  go.className = "settings-btn-primary";
+  go.textContent = "Connect";
+  actions.append(go);
+  body.append(actions);
+
+  go.addEventListener("click", async () => {
+    const phrase = input.value.trim();
+    if (phrase.length < 8) {
+      status.textContent = "Use at least 8 characters \u2014 a few words is ideal.";
+      return;
+    }
+    go.disabled = true;
+    status.textContent = "Connecting\u2026";   // PBKDF2 takes a moment on a phone
+    try {
+      const res = await syncConnect(phrase);
+      input.value = "";
+      if (res === "seeded") toast("Sync on \u2014 this device's settings are now the backup");
+      else if (res === "applied") toast("Sync on \u2014 settings restored");
+      else toast("Sync on \u2014 already up to date");
+      if (res === "applied") {
+        state.ranges = {};
+        state.cals = getFeeds().map((f) => ({ id: f.id, summary: f.name || "Calendar" }));
+        if ($("screen-main").hidden) { showMain(); boot(); }
+        else { renderToday(); renderWeek(); if (state.activeTab === "lists") renderLists(); }
+      }
+      openSettingsPage("sync");
+    } catch (e) {
+      go.disabled = false;
+      status.textContent = String(e.message) === "bad-passphrase"
+        ? "That phrase doesn't match the existing backup. Check it and try again."
+        : "Couldn't reach the backup \u2014 check your connection and try again.";
+    }
+  });
+}
+
 function openSettingsPage(page) {
   $("settings-back").hidden = false;
   const body = $("settings-body");
@@ -2813,6 +3087,11 @@ function openSettingsPage(page) {
   if (page === "calendars") {
     $("settings-title").textContent = "Calendars";
     renderCalendarSettings(body);
+  }
+
+  if (page === "sync") {
+    $("settings-title").textContent = "Household sync";
+    renderSyncSettings(body);
   }
 
   if (page === "lists") {
@@ -3055,6 +3334,7 @@ function wireUI() {
     updateWakeLock(); // v58: re-acquire on return, release on hide
     if (!document.hidden) {
       flushOutbox(); // v75: coming back to the app is a chance to sync
+      if (syncOn()) syncPull().catch(() => {});            // v81
       if (usingFeeds()) refreshAll();                      // v79: no token needed
       else if (localStorage.getItem("hub.authed") === "1" && ensureToken()) refreshAll();
     }
