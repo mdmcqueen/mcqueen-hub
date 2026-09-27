@@ -2528,10 +2528,11 @@ function pinCapSheet() {
   if (!vv || !sheet || sheet.hidden) return;
   const kbInset = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
   sheet.style.transform = kbInset > 1 ? `translateY(-${kbInset}px)` : "";
+  sheet.classList.toggle("kb-open", kbInset > 1); // v85
 }
 function unpinCapSheet() {
   const sheet = $("cap-sheet");
-  if (sheet) sheet.style.transform = "";
+  if (sheet) { sheet.style.transform = ""; sheet.classList.remove("kb-open"); }
 }
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", pinCapSheet);
