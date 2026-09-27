@@ -924,9 +924,17 @@ async function renderPantryLens(ctx) {
         ]);
         const openIds = new Set(open.map(t => t.id));
         return { store: s, open, done: done.filter(c => c.id && !openIds.has(c.id)) };
-      } catch (_) { return { store: s, open: [], done: [] }; }
+      } catch (_) { return { store: s, open: [], done: [], failed: true }; }
     }));
     writeListCache(ctx.pantry.id, { perStore, locs: state.pantryLocs });
+    // v84: Pantry just fetched every store's items — hand them to each store's
+    // own cache (keeping its sections) so the chip counts are current too.
+    perStore.forEach(({ store, open, done, failed }) => {
+      if (failed) return;
+      const prev = readListCache(store.id) || {};
+      writeListCache(store.id, { ...prev, tasks: open, doneItems: done });
+    });
+    buildProjectBar();
     renderPantryData(el, perStore);
   } catch (e) {
     if (!el.querySelector(".task-row")) {
@@ -962,9 +970,20 @@ const qtyOf = (t) => {
   const m = /(?:^|\n)qty:\s*(\d+)\s*$/im.exec((t && t.description) || "");
   return m ? Math.max(0, parseInt(m[1], 10)) : 1; // v59: 0 allowed = "not needed, keep on list"
 };
+const withQty = (description, q) => {
+  const base = (description || "").replace(/(?:^|\n)qty:\s*\d+\s*$/gim, "").trim();
+  return q === 1 ? base : (base ? base + "\n" : "") + "qty: " + q;
+};
+// v84: mirror a quantity change into the owning store's cached list so its
+// chip count moves on the tap (qty 0 = not needed, so it drops off the count).
+function cacheSetQty(projectId, taskId, q) {
+  const c = projectId ? readListCache(projectId) : null;
+  if (!c) return;
+  const fix = (arr) => (arr || []).map(t => t.id === taskId ? { ...t, description: withQty(t.description, q) } : t);
+  writeListCache(projectId, { ...c, tasks: fix(c.tasks), doneItems: fix(c.doneItems) });
+}
 async function saveQty(task, q) {
-  const base = ((task.description) || "").replace(/(?:^|\n)qty:\s*\d+\s*$/gim, "").trim();
-  const desc = q === 1 ? base : (base ? base + "\n" : "") + "qty: " + q;
+  const desc = withQty(task.description, q);
   await todoistFetch("/tasks/" + task.id, "POST", { description: desc });
   task.description = desc;
 }
@@ -983,7 +1002,10 @@ function neededCount(pid) {
   // v75: discount check-offs still in flight, so the badge drops on the tap
   // instead of sitting on the count from the last completed refresh.
   const pend = outboxMap();
-  return c.tasks.filter(t => qtyOf(t) >= 1 && pend[t.id] !== "close").length;
+  // v84: and count un-checks still in flight, so putting an item back on the
+  // list (e.g. from Pantry) raises the badge on the tap too.
+  return c.tasks.filter(t => qtyOf(t) >= 1 && pend[t.id] !== "close").length +
+    (c.doneItems || []).filter(t => qtyOf(t) >= 1 && pend[t.id] === "reopen").length;
 }
 
 // v55: recurring tasks "roll forward" on completion rather than finishing —
@@ -1070,6 +1092,7 @@ function attachSwipe(wrap, row, onDelete) {
 
 function buildTaskRow(task, isDone, opts) {
   opts = opts || {};
+  const ownerPid = opts.storeId || task.projectId || task.project_id || state.activeListId; // v84
   const row = document.createElement("div");
   row.className = "task-row" + (isDone ? " task-done" : "") + (isRecurringTask(task) ? " recurring" : "");
   row.id = "task-" + task.id;
@@ -1108,8 +1131,11 @@ function buildTaskRow(task, isDone, opts) {
   cb.innerHTML = isDone ? CHECK_DONE_SVG : CHECK_OPEN_SVG;
   cb.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (cb.dataset.done === "1") uncompleteTask(task.id);
-    else completeTask(task.id, { kind: "list", data: { task, projectId: state.activeListId } });
+    // v84: record the check-off against the store that owns the task, not the
+    // list being viewed — in the Pantry lens those differ, and writing it
+    // under Pantry left the store's chip count stale until it was opened.
+    if (cb.dataset.done === "1") uncompleteTask(task.id, ownerPid);
+    else completeTask(task.id, { kind: "list", data: { task, projectId: ownerPid } });
   });
   const label = document.createElement("span");
   label.className = "task-label";
@@ -1137,6 +1163,8 @@ function buildTaskRow(task, isDone, opts) {
     const change = (d) => {
       q = Math.max(0, q + d);
       renderQ();
+      cacheSetQty(ownerPid, task.id, q); // v84
+      buildProjectBar();
       clearTimeout(saveTimer);
       saveTimer = setTimeout(async () => {
         try { await saveQty(task, q); }
@@ -1415,7 +1443,7 @@ async function completeTask(id, ctx) {
   }
 }
 
-async function uncompleteTask(id) {
+async function uncompleteTask(id, ownerPid) {
   const row = $("task-" + id);
   const wrap = row ? wrapOf(row) : null;
   // v65: undoing within the grace period cancels the pending trip-mode hide
@@ -1430,7 +1458,7 @@ async function uncompleteTask(id) {
     if (cb) { cb.innerHTML = CHECK_OPEN_SVG; cb.dataset.done = "0"; }
   }
   state.completedRecently.delete(id);
-  const projectId = state.activeListId; // v75
+  const projectId = ownerPid || state.activeListId; // v75; v84: owning store
   outboxPut(id, "reopen", projectId);
   buildProjectBar();
   try {
