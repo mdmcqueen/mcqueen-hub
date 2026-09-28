@@ -37,12 +37,16 @@
 
   <!-- Main app -->
   <section id="screen-main" class="screen" hidden>
+    <div id="top-scrim" class="top-scrim" aria-hidden="true"></div>
     <header>
       <div>
         <div id="hdr-date" class="hdr-date"></div>
-        <span class="build-ver">v85</span>
+        <span class="build-ver">v86</span>
               </div>
-      <button id="btn-settings" class="btn-settings" title="Settings"><i class="ti ti-settings"></i></button>
+      <div class="hdr-actions">
+        <button id="btn-search" class="btn-settings" title="Search this list" hidden><i class="ti ti-search"></i></button>
+        <button id="btn-settings" class="btn-settings" title="Settings"><i class="ti ti-settings"></i></button>
+      </div>
     </header>
     <div id="ptr" class="ptr" hidden></div>
 
@@ -63,7 +67,15 @@
 
     <!-- Lists tab -->
     <main id="tab-lists" class="tab" hidden>
-      <div id="lists-project-bar" class="lists-project-bar"></div>
+      <div id="lists-sticky" class="lists-sticky">
+        <div id="list-search" class="list-search" hidden>
+          <i class="ti ti-search" aria-hidden="true"></i>
+          <input id="list-search-input" type="text" placeholder="Search this list"
+                 autocomplete="off" autocorrect="off" autocapitalize="off" enterkeyhint="search">
+          <button id="list-search-close" type="button" class="list-search-close" aria-label="Close search"><i class="ti ti-x"></i></button>
+        </div>
+        <div id="lists-project-bar" class="lists-project-bar"></div>
+      </div>
       <div id="lists-tasks" class="task-list"></div>
     </main>
 

@@ -437,7 +437,7 @@ function buildProjectBar(animate) {
 // --pillbar-h` (see styles.css) so it stacks directly under the pill bar
 // regardless of badge counts/font scaling changing the bar's real height.
 function syncPillbarHeight() {
-  const bar = $("lists-project-bar");
+  const bar = $("lists-sticky") || $("lists-project-bar"); // v86: search row + pills
   if (!bar || bar.hidden) return;
   const h = bar.getBoundingClientRect().height;
   if (h > 0) document.documentElement.style.setProperty("--pillbar-h", h + "px");
@@ -561,8 +561,11 @@ function wireSectionCollapse(el, listId) {
     const key = secKeyOf(head);
     if (set.has(key)) applySectionCollapse(head, true);
     head.addEventListener("click", (e) => {
-      // A section rename also lives on this heading (v50) — don't hijack it.
-      if (e.target.tagName === "INPUT") return;
+      // v86: only the –/+ collapses. On lens headings (no rename) the title
+      // collapses too, since it has no other job there.
+      const onToggle = e.target.closest(".sec-toggle");
+      const onTitle = e.target.closest(".sec-title");
+      if (!onToggle && !(onTitle && head.dataset.noRename)) return;
       const live = getCollapsed(listId);
       const now = !live.has(key);
       now ? live.add(key) : live.delete(key);
@@ -572,8 +575,19 @@ function wireSectionCollapse(el, listId) {
   });
 }
 
+/* v86: the heading is two tap targets, not one full-width strip. The title
+   text renames (store lists only) and the –/+ collapses; the empty space to
+   the right does nothing. A tap anywhere used to do both at once, which
+   kept dropping Michael into rename mid-aisle. */
 function setSectionHeadContent(head, name) {
-  head.textContent = name; // v62: pencil hint removed — tap still renames
+  const title = document.createElement("span");
+  title.className = "sec-title";
+  title.textContent = name;
+  const tog = document.createElement("button");
+  tog.type = "button";
+  tog.className = "sec-toggle";
+  tog.setAttribute("aria-label", "Collapse or expand section");
+  head.replaceChildren(title, tog);
 }
 
 // "+ Add section" control at the bottom of real (non-lens) lists (v53).
@@ -731,7 +745,9 @@ function renderListData(el, data) {
     head.className = "list-section-head";
     head.dataset.sectionId = s.id; // drag-drop target (v49)
     setSectionHeadContent(head, s.name);
-    head.addEventListener("click", () => beginSectionRename(head, s)); // v50
+    head.addEventListener("click", (e) => { // v50; v86: title text only
+      if (e.target.closest(".sec-title")) beginSectionRename(head, s);
+    });
     frag.appendChild(head);
     renderGroup(s.id);
   });
@@ -741,6 +757,7 @@ function renderListData(el, data) {
   frag.appendChild((inventory && tripOn()) ? tripDoneButton() : listEndMarker());
   el.replaceChildren(frag);
   wireSectionCollapse(el, state.activeListId); // v82
+  applyListSearch(); // v86
 }
 
 const listCacheKey = (id) => "hub.listCache." + id;
@@ -894,13 +911,15 @@ function renderPantryData(el, perStore) {
     const head = document.createElement("div");
     head.className = "list-section-head";
     head.dataset.loc = loc; // v61: drag-drop target
-    head.textContent = loc;
+    head.dataset.noRename = "1"; // v86
+    setSectionHeadContent(head, loc);
     frag.appendChild(head);
     rows.forEach(r => frag.appendChild(r));
   });
   frag.appendChild(listEndMarker());
   el.replaceChildren(frag);
   wireSectionCollapse(el, state.activeListId); // v82
+  applyListSearch(); // v86
 }
 
 async function renderPantryLens(ctx) {
@@ -3491,10 +3510,79 @@ function switchTab(tab) {
   });
   if (tab === "lists") renderLists();
   if (tab === "week") scrollWeekToToday(); // v69
+  const sb = $("btn-search"); if (sb) sb.hidden = (tab !== "lists"); // v86: lists only
+  fadeHeader();
   updateWakeLock();
   if (state.fabOpen) closeFab(); // v82: no per-tab menu to refresh; a tab
                                  // change while capturing just cancels it
 }
+
+/* ---------- list search (v86) ----------
+   Filters the list in view — never the whole app. Rows whose title doesn't
+   contain the query are hidden, headings with no matches go with them, and
+   matches inside a collapsed section show anyway. Re-applied after every
+   render, so a background refresh or switching lists keeps the filter. */
+function applyListSearch() {
+  const el = $("lists-tasks");
+  if (!el) return;
+  const input = $("list-search-input");
+  const open = $("list-search") && !$("list-search").hidden;
+  const q = open && input ? input.value.trim().toLowerCase() : "";
+  el.classList.toggle("searching", !!q);
+  let hits = 0;
+  el.querySelectorAll(".task-row").forEach((row) => {
+    const box = wrapOf(row) || row;
+    const label = (row.querySelector(".task-label") || row).textContent.toLowerCase();
+    const miss = !!q && !label.includes(q);
+    box.classList.toggle("search-miss", miss);
+    if (!miss) hits++;
+  });
+  el.querySelectorAll(".list-section-head").forEach((head) => {
+    let any = false, n = head.nextElementSibling;
+    while (n && !n.classList.contains("list-section-head")) {
+      if ((n.classList.contains("swipe-wrap") || n.classList.contains("task-row")) &&
+          !n.classList.contains("search-miss")) { any = true; break; }
+      n = n.nextElementSibling;
+    }
+    head.classList.toggle("search-miss", !!q && !any);
+  });
+  let empty = el.querySelector(".search-empty");
+  if (q && !hits) {
+    if (!empty) { empty = document.createElement("div"); empty.className = "search-empty"; el.prepend(empty); }
+    empty.textContent = "Nothing on this list matches “" + input.value.trim() + "”";
+  } else if (empty) empty.remove();
+}
+function openListSearch() {
+  const box = $("list-search");
+  box.hidden = false;
+  syncPillbarHeight();
+  const input = $("list-search-input");
+  input.focus();
+  applyListSearch();
+}
+function closeListSearch() {
+  $("list-search-input").value = "";
+  $("list-search").hidden = true;
+  syncPillbarHeight();
+  applyListSearch();
+}
+
+/* ---------- header fade + status-bar scrim (v86) ----------
+   The date/version header scrolls with the page; without this it slid under
+   the iOS clock and signal icons. A fixed scrim covers the status-bar strip,
+   and the header fades out as it approaches it. */
+function fadeHeader() {
+  const h = document.querySelector("#screen-main > header");
+  if (!h) return;
+  const scrim = $("top-scrim");
+  const safe = scrim ? scrim.offsetHeight : 0;
+  const r = h.getBoundingClientRect();
+  const span = r.height - safe - 8;
+  const vis = span > 0 ? (r.bottom - safe - 8) / span : 1;
+  h.style.opacity = String(Math.max(0, Math.min(1, vis)));
+}
+window.addEventListener("scroll", fadeHeader, { passive: true });
+document.addEventListener("scroll", fadeHeader, { passive: true, capture: true });
 
 /* ---------- UI wiring ---------- */
 function showSignin() { $("screen-signin").hidden = false; $("screen-main").hidden = true; }
@@ -3516,6 +3604,15 @@ function wireUI() {
     openSettingsPage("calendars");
   });
   $("btn-settings").addEventListener("click", openSettings);
+  // v86: list search
+  $("btn-search").addEventListener("click", () =>
+    $("list-search").hidden ? openListSearch() : closeListSearch());
+  $("list-search-close").addEventListener("click", closeListSearch);
+  $("list-search-input").addEventListener("input", applyListSearch);
+  $("list-search-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } // hide keyboard, keep filter
+    if (e.key === "Escape") closeListSearch();
+  });
   $("settings-back").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", closeSettings);
   $("settings").addEventListener("click", (e) => { if (e.target === $("settings")) closeSettings(); });

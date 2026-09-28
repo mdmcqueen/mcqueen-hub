@@ -34,6 +34,12 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
   border-radius: 12px; background: var(--accent); color: var(--accent-ink);
   font-size: 1rem; font-weight: 600; cursor: pointer; }
 
+/* v86: covers the status-bar strip so scrolled content never sits under the
+   clock/signal icons. Same colour as every sticky bar, so it's invisible
+   against them and only shows its job while the header scrolls away. */
+.top-scrim { position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top, 0px);
+  background: var(--bg); z-index: 15; pointer-events: none; }
+
 /* Header */
 .btn-settings { border: 0; background: none; color: var(--ink); font-size: 1.3rem;
   cursor: pointer; padding: 4px; line-height: 1; display: flex; align-items: center; }
@@ -136,10 +142,28 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
 /* v64: sticky so the store/list chips stay pinned; .list-section-head's
    top offset (below) is kept in sync with this bar's real height via
    --pillbar-h, measured in JS after every render. */
-.lists-project-bar { display: flex; gap: 8px; overflow-x: auto;
-  margin: 0 -16px; padding: calc(env(safe-area-inset-top, 0px) + 2px) 16px 12px;
-  -webkit-overflow-scrolling: touch; scrollbar-width: none;
-  position: sticky; top: 0; z-index: 6; background: var(--bg); }
+/* v86: the sticky block is now a wrapper holding the search row + pill bar,
+   so --pillbar-h (measured off the wrapper) covers both and section heads
+   still stack flush underneath. */
+.lists-sticky { position: sticky; top: 0; z-index: 6; background: var(--bg);
+  margin: 0 -16px; padding-top: calc(env(safe-area-inset-top, 0px) + 2px); }
+.lists-project-bar { display: flex; gap: 8px; overflow-x: auto; padding: 0 16px 12px;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.hdr-actions { display: flex; align-items: center; gap: 14px; }
+.list-search { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px;
+  padding: 0 4px 0 12px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 999px; color: var(--muted); }
+.list-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none;
+  color: var(--ink); font-family: inherit; padding: 9px 0; }
+.list-search-close { border: 0; background: none; color: var(--muted); font-size: 1.05rem;
+  width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; }
+/* matches stay visible even inside a collapsed section while searching */
+.task-list.searching .search-miss { display: none !important; }
+.task-list.searching .swipe-wrap.sec-hidden:not(.search-miss) { display: block !important; }
+.task-list.searching .task-row.sec-hidden:not(.search-miss) { display: flex !important; }
+.task-list.searching .add-section-btn { display: none; }
+.search-empty { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 24px 0; }
 .lists-project-bar::-webkit-scrollbar { display: none; }
 .lists-project-btn { flex-shrink: 0; padding: 6px 14px; border: 0; outline: none;
   -webkit-appearance: none; border-radius: 20px; background: var(--card); color: var(--muted);
@@ -286,9 +310,14 @@ h3 { font-size: 0.9rem; margin: 18px 0 6px; }
    to reorder reads .task-row positions directly), so collapsing just hides
    them rather than restructuring the DOM. */
 .sec-hidden { display: none !important; }
-.list-section-head { cursor: pointer; }
-.list-section-head::after { content: "\2013"; margin-left: 6px; opacity: 0.55; font-weight: 700; }
-.list-section-head.collapsed::after { content: "+"; }
+.list-section-head { display: flex; align-items: center; }
+/* v86: title and –/+ are the only tap targets; the row itself is inert */
+.sec-title { cursor: pointer; }
+.sec-toggle { border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+  padding: 6px 12px; margin: -6px 0 -6px 2px; line-height: 1; opacity: 0.55;
+  -webkit-appearance: none; appearance: none; -webkit-tap-highlight-color: transparent; }
+.sec-toggle::before { content: "\2013"; }
+.list-section-head.collapsed .sec-toggle::before { content: "+"; }
 /* v82: capture chips that carry a native <select> rather than a date input */
 .cap-chip-plain { border: 1px solid var(--line); background: var(--card); color: var(--ink);
   font-weight: 600; cursor: pointer; position: relative; }
